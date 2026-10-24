@@ -1,7 +1,7 @@
 """Разработка без робота: TurtleBot4 в Gazebo + сервисная часть.
 
-ros2 launch compass_bringup sim.launch.py            — с окном Gazebo и RViz
-ros2 launch compass_bringup sim.launch.py headless:=True
+ros2 launch compass_sim sim.launch.py            — с окном Gazebo и RViz
+ros2 launch compass_sim sim.launch.py headless:=True
 
 Карты — в ~/.local/share/compass (на роботе /var/lib/robot).
 """

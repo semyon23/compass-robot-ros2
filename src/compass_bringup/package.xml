@@ -19,7 +19,6 @@
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>task_orchestrator_core</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
-  <exec_depend>nav2_minimal_tb4_sim</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

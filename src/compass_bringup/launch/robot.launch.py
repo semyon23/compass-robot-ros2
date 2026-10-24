@@ -2,7 +2,7 @@
 
 SLAM и навигацию (Nav2) compass_core запускает сам — slam.launch.py и nav.launch.py.
 
-На роботе запускается рядом с его драйверами; в разработке — из sim.launch.py.
+На роботе запускается рядом с его драйверами; в разработке — из compass_sim (sim.launch.py).
 """
 import os
 

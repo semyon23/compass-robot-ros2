@@ -50,7 +50,8 @@ ROS 2 workspace со всем, что работает на ПК робота: �
 | `robot_interfaces` | общие msg/srv: режим, статус, аренда управления, джойстик, поза, скан, карты, навигация, журнал, настройки | ✅ этап 4 |
 | `compass_core` | сервисная часть: режим работы, статус, аренда управления, джойстик, поза, скан, картографирование, библиотека карт, активная карта и локализация, сервисные цели через task_orchestrator; журнал WARN+, настройки робота (`robot.yaml`); SLAM и Nav2 — дочерними процессами | ✅ этап 4 |
 | `compass_web` | веб-сервер Compass вместо nginx: статика UI, `/files`, прокси `/rosbridge` (Tornado из зависимостей rosbridge) | ✅ |
-| `compass_bringup` | launch: `robot.launch.py` (compass_core, twist_mux, rosbridge, compass_web), `slam.launch.py` и `nav.launch.py` (SLAM / map_server + AMCL + Nav2 — запускает compass_core), task_orchestrator и `sim.launch.py` (+ TurtleBot4 в Gazebo) | ✅ срез 3 |
+| `compass_bringup` | launch: `robot.launch.py` (compass_core, twist_mux, rosbridge, compass_web), `slam.launch.py` и `nav.launch.py` (SLAM / map_server + AMCL + Nav2 — запускает compass_core), конфиги (Nav2, slam_toolbox, rosbridge, задачи, схема настроек) | ✅ этап 4 |
+| `compass_sim` | `sim.launch.py`: TurtleBot4 в Gazebo + `robot.launch.py`. Только для разработки, на робот не копируется | ✅ |
 | `vda5050_ros2` | агент VDA 5050 (ядро — из симулятора fms) | впереди |
 | `third_party/ros2_task_orchestrator` | 1.0.0 — исполнитель задач | ✅ собирается |
 
@@ -78,8 +79,8 @@ ros2 interface package robot_interfaces
 ## Запуск в симуляции
 
 ```bash
-ros2 launch compass_bringup sim.launch.py              # Gazebo + RViz
-ros2 launch compass_bringup sim.launch.py headless:=True
+ros2 launch compass_sim sim.launch.py              # Gazebo + RViz
+ros2 launch compass_sim sim.launch.py headless:=True
 ```
 
 TurtleBot4 в Gazebo (без Nav2), `compass_core`, twist_mux и rosbridge на `127.0.0.1:9090`.
@@ -107,7 +108,7 @@ rosbridge — из apt (`ros-jazzy-rosbridge-server`): версия из исх�
 Копируем только исходники — `build/`, `install/`, `log/` собираются на месте:
 
 ```bash
-rsync -a --delete --exclude build --exclude install --exclude log ~/compass_ws/ <робот>:~/compass_ws/
+rsync -a --delete --exclude build --exclude install --exclude log --exclude src/compass_sim ~/compass_ws/ <робот>:~/compass_ws/
 ```
 
 На роботе один раз — зависимости из `package.xml` всех пакетов:
