@@ -1,5 +1,6 @@
 # /robot/set_operating_mode
 string mode                      # AUTOMATIC | INTERVENED | MANUAL | SERVICE | TEACH_IN
+string continue_from             # для TEACH_IN: id карты, которую достраиваем; пусто — новая
 ---
 bool success
 string error_code                # MODE_NOT_ALLOWED, INVALID_INPUT, …; пусто при success
