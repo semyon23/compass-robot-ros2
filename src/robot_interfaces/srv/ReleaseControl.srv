@@ -1,0 +1,6 @@
+# /compass/control/release
+string lease_id
+---
+bool success
+string error_code
+string message

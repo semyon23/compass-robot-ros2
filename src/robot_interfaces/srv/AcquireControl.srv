@@ -1,0 +1,9 @@
+# /compass/control/acquire
+string client_id                 # uuid вкладки браузера
+string client_name               # «Chrome · Linux»
+bool force                       # true — перехватить у другого клиента
+---
+bool success
+string error_code                # CONTROL_LOCKED, MODE_NOT_ALLOWED
+string message
+string lease_id

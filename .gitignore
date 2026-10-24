@@ -1,0 +1,16 @@
+# colcon: собирается на месте, в т.ч. на роботе
+/build/
+/install/
+/log/
+
+cmake-build-*/
+
+.idea/
+
+__pycache__/
+*.pyc
+
+
+*.swp
+*~
+.DS_Store

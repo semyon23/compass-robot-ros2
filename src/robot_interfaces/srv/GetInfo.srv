@@ -1,0 +1,11 @@
+# /compass/get_info
+---
+bool success
+string error_code
+string message
+string robot_name
+string serial_number
+string manufacturer
+string model
+diagnostic_msgs/KeyValue[] versions
+string[] capabilities            # что умеет робот; UI прячет остальное
