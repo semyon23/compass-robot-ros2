@@ -1,0 +1,171 @@
+#include "compass_core/compass_core.hpp"
+
+#include <fstream>
+
+#include <yaml-cpp/yaml.h>
+
+using json = nlohmann::json;
+
+namespace compass_core {
+
+// ---------- Сервисы /compass/config/* (JsonCall) ----------
+//
+// get_schema → схема; get → { version, values }; history → [ { version, createdAt, client, comment,
+// changes } ]; apply { baseVersion, values, comment, client } и rollback { version, client } →
+// { version, changed }. Ошибки проверки — INVALID_INPUT и { errors: { ключ: { code, message } } }.
+
+void CompassCore::on_config(const std::string & op, JsonCall::Request::SharedPtr req, JsonCall::Response::SharedPtr res)
+{
+  const json in = json::parse(req->request_json.empty() ? "{}" : req->request_json, nullptr, false);
+  if (in.is_discarded() || !in.is_object()) {
+    return fail(res, "INVALID_INPUT", "request_json — объект JSON");
+  }
+  res->success = true;
+  if (op == "get_schema") {
+    res->response_json = config_->schema().dump();
+    return;
+  }
+  if (op == "get") {
+    res->response_json = json{{"version", config_->version()}, {"values", config_->values()}}.dump();
+    return;
+  }
+  if (op == "history") {
+    res->response_json = config_->history().dump();
+    return;
+  }
+  const std::string client = in.value("client", "");
+  const auto r = op == "apply"
+                   ? config_->apply(in.value("baseVersion", -1), in.value("values", json::object()),
+                                    in.value("comment", ""), client)
+                   : config_->rollback(in.value("version", -1), client);
+  if (!r.ok) {
+    fail(res, r.code.c_str(), r.message);
+    res->response_json = json{{"errors", r.errors}}.dump();
+    return;
+  }
+  res->response_json = json{{"version", config_->version()}, {"changed", r.changed}}.dump();
+  if (r.changed.empty()) {
+    return;
+  }
+  apply_config(r.changed);
+  robot_interfaces::msg::ConfigChanged msg;
+  msg.version = config_->version();
+  for (const auto & key : r.changed) {
+    msg.changed_keys.push_back(key);
+  }
+  config_changed_pub_->publish(msg);
+  emit_event("info", "CONFIG_APPLIED", "Config version " + std::to_string(config_->version()),
+             {{"version", std::to_string(config_->version())}, {"client", client}});
+  RCLCPP_INFO(get_logger(), "Настройки: версия %d (%s)", config_->version(), r.changed.dump().c_str());
+}
+
+// ---------- Применение ----------
+
+void CompassCore::apply_config(const json & changed)
+{
+  const auto has = [&changed](const std::string & prefix) {
+    if (changed.is_null()) {
+      return true;
+    }
+    for (const auto & key : changed) {
+      if (key.get<std::string>().rfind(prefix, 0) == 0) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const json & v = config_->values();
+  if (has("identity.")) {
+    robot_name_ = v["identity.name"];
+    serial_number_ = v["identity.serial_number"];
+    manufacturer_ = v["identity.manufacturer"];
+    model_ = v["identity.model"];
+  }
+  if (has("motion.")) {
+    max_linear_ = setting("motion.max_linear");  // джойстик — сразу
+    max_angular_ = setting("motion.max_angular");
+    if (navigation_up_) {
+      push_nav_limits();
+    }
+  }
+  if (has("battery.min_task_percent")) {
+    write_tasks_config();
+    tasks_reloaded_ = false;  // reload_tasks() попросит оркестратор перечитать
+  }
+  if (has("battery.")) {
+    battery_low_ = battery_critical_ = false;  // пороги сменились — проверим заново
+    check_battery();
+  }
+}
+
+// Лимиты скорости Nav2 — в velocity_smoother: он стоит после любого контроллера (MPPI, DWB, …),
+// и его параметры меняются на ходу.
+void CompassCore::push_nav_limits()
+{
+  if (!smoother_params_->service_is_ready()) {
+    return;
+  }
+  const double lin = max_linear_, ang = max_angular_;
+  smoother_params_->set_parameters({
+    rclcpp::Parameter("max_velocity", std::vector<double>{lin, 0.0, ang}),
+    rclcpp::Parameter("min_velocity", std::vector<double>{-lin, 0.0, -ang}),
+  });
+}
+
+// Порог «минимум для задач» действует и на задания fms, поэтому он в допуске оркестратора:
+// admission.min_battery_percent у каждой задачи tasks.yaml.
+void CompassCore::write_tasks_config()
+{
+  if (tasks_template_.empty()) {
+    return;
+  }
+  YAML::Node tasks = YAML::LoadFile(tasks_template_);
+  for (auto task : tasks["tasks"]) {
+    task["admission"]["min_battery_percent"] = static_cast<int>(setting("battery.min_task_percent"));
+  }
+  const std::string tmp = tasks_config_ + ".tmp";
+  std::ofstream(tmp) << "# Собран compass_core из compass_bringup/config/tasks.yaml + настроек батареи. Не править.\n"
+                     << YAML::Dump(tasks) << "\n";
+  std::filesystem::rename(tmp, tasks_config_);
+}
+
+// Оркестратор мог стартовать раньше, чем compass_core собрал tasks.yaml: тогда он работает без
+// задач. Поэтому просим перечитать, как только сервис доступен, и после каждой смены порога.
+void CompassCore::reload_tasks()
+{
+  if (tasks_reloaded_ || !reload_tasks_client_->service_is_ready()) {
+    return;
+  }
+  tasks_reloaded_ = true;
+  reload_tasks_client_->async_send_request(
+    std::make_shared<ReloadTasks::Request>(), [this](rclcpp::Client<ReloadTasks>::SharedFuture f) {
+      if (!f.get()->success) {
+        RCLCPP_WARN(get_logger(), "task_orchestrator не перечитал tasks.yaml: %s", f.get()->error_message.c_str());
+      }
+    });
+}
+
+// Пороги батареи; гистерезис 2 % — чтобы событие не повторялось, пока заряд колеблется у порога.
+void CompassCore::check_battery()
+{
+  if (!battery_.present) {
+    return;
+  }
+  const double p = battery_.percent;
+  const std::string pct = std::to_string(static_cast<int>(p));
+  if (!battery_low_ && p < setting("battery.warn_percent")) {
+    battery_low_ = true;
+    emit_event("warning", "BATTERY_LOW", "Battery low: " + pct + "%", {{"percent", pct}});
+  } else if (battery_low_ && p > setting("battery.warn_percent") + 2) {
+    battery_low_ = false;
+  }
+  if (!battery_critical_ && p < setting("battery.critical_percent")) {
+    battery_critical_ = true;
+    cancel_goal();
+    emit_event("error", "BATTERY_CRITICAL", "Battery critical: " + pct + "%", {{"percent", pct}});
+  } else if (battery_critical_ && p > setting("battery.critical_percent") + 2) {
+    battery_critical_ = false;
+  }
+}
+
+}  // namespace compass_core

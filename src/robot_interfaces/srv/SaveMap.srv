@@ -1,0 +1,9 @@
+# /compass/mapping/save — сохранить строящуюся карту (TEACH_IN).
+# Имя занято другой картой: overwrite=false — CONFLICT, true — перезаписать её.
+string name
+bool overwrite
+---
+bool success
+string error_code
+string message
+MapInfo map

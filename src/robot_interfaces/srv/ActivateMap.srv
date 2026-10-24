@@ -1,0 +1,9 @@
+# /robot/maps/activate — карта для локализации и навигации: compass_core (пере)запускает стек
+# навигации с этой картой. Ответ сразу, ход — в status.transition / status.stacks.
+string map_id
+bool has_initial_pose            # true — после запуска стека передать AMCL initial_pose
+Pose2D initial_pose              # во фрейме map
+---
+bool success
+string error_code
+string message

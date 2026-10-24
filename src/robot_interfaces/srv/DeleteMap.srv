@@ -1,0 +1,6 @@
+# /compass/maps/delete — CONFLICT, если карту сейчас строят.
+string id
+---
+bool success
+string error_code
+string message

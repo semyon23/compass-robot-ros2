@@ -1,0 +1,81 @@
+# Схема настроек робота (ROS_INTERFACES.md §3.5): что можно менять из Compass.
+# compass_core проверяет по ней значения, UI строит по ней формы — новое поле добавляется здесь.
+#   type: string | number | integer;  number/integer: min, max, step, unit;  string: maxLength, required
+#   default — значение, пока robot.yaml ещё нет (identity и motion — из compass_core.yaml).
+sections:
+  - id: identity
+    title: {ru: Робот, en: Robot}
+    fields:
+      - key: identity.name
+        type: string
+        required: true
+        maxLength: 32
+        default: compass-robot
+        label: {ru: Имя робота, en: Robot name}
+        help: {ru: Показывается в Compass и во флоте, en: Shown in Compass and in the fleet}
+      - key: identity.serial_number
+        type: string
+        maxLength: 64
+        default: ""
+        label: {ru: Серийный номер, en: Serial number}
+        help: {ru: "serialNumber в VDA 5050: часть MQTT-топиков робота", en: "VDA 5050 serialNumber: part of the robot MQTT topics"}
+      - key: identity.manufacturer
+        type: string
+        maxLength: 64
+        default: ""
+        label: {ru: Производитель, en: Manufacturer}
+      - key: identity.model
+        type: string
+        maxLength: 64
+        default: ""
+        label: {ru: Модель, en: Model}
+
+  - id: motion
+    title: {ru: Движение, en: Motion}
+    fields:
+      - key: motion.max_linear
+        type: number
+        min: 0.05
+        max: 2.0
+        step: 0.05
+        unit: m/s
+        default: 0.5
+        label: {ru: Макс. линейная скорость, en: Max linear speed}
+        help: {ru: Предел для джойстика и для Nav2 (velocity_smoother), en: Limit for the joystick and for Nav2 (velocity_smoother)}
+      - key: motion.max_angular
+        type: number
+        min: 0.1
+        max: 3.0
+        step: 0.1
+        unit: rad/s
+        default: 1.0
+        label: {ru: Макс. угловая скорость, en: Max angular speed}
+        help: {ru: Предел для джойстика и для Nav2 (velocity_smoother), en: Limit for the joystick and for Nav2 (velocity_smoother)}
+
+  - id: battery
+    title: {ru: Батарея, en: Battery}
+    fields:
+      - key: battery.warn_percent
+        type: integer
+        min: 0
+        max: 100
+        unit: "%"
+        default: 25
+        label: {ru: Предупреждение, en: Warning}
+        help: {ru: Ниже — событие «Низкий заряд», en: Below — a Battery low event}
+      - key: battery.min_task_percent
+        type: integer
+        min: 0
+        max: 100
+        unit: "%"
+        default: 15
+        label: {ru: Минимум для задач, en: Minimum for tasks}
+        help: {ru: Ниже — новые задачи (цели Compass и задания fms) не принимаются, en: Below — new tasks (Compass goals and fms orders) are rejected}
+      - key: battery.critical_percent
+        type: integer
+        min: 0
+        max: 100
+        unit: "%"
+        default: 8
+        label: {ru: Критический, en: Critical}
+        help: {ru: Ниже — текущая цель отменяется, en: Below — the current goal is canceled}

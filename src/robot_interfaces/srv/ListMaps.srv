@@ -1,0 +1,6 @@
+# /compass/maps/list
+---
+bool success
+string error_code
+string message
+MapInfo[] maps                   # новые сверху

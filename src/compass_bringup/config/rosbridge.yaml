@@ -1,0 +1,11 @@
+# rosbridge для Compass: только localhost (снаружи — через compass_web), только нужное UI.
+# Контракт — compass-ui/docs/ROS_INTERFACES.md §6. Пустая строка = «разрешено всё», запрет — "[]".
+rosbridge_websocket:
+  ros__parameters:
+    address: "127.0.0.1"
+    port: 9090
+    topics_sub_glob: "[/robot/operating_mode, /compass/status, /compass/pose, /compass/scan_points, /compass/nav_status, /compass/events, /compass/config/changed, /behavior_tree_log, /vda5050/status, /vda5050/path, /map, /plan, /rosout, /task_orchestrator/active_tasks]"
+    topics_pub_glob: "[/compass/teleop, /compass/control/heartbeat, /initialpose]"
+    services_glob: "[/compass/*, /robot/set_operating_mode, /robot/maps/activate, /task_orchestrator/list_task_records, /task_orchestrator/list_events, /task_orchestrator/get_task]"
+    actions_glob: "[]"
+    params_glob: "[]"

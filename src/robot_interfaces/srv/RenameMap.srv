@@ -1,0 +1,8 @@
+# /compass/maps/rename
+string id
+string name
+---
+bool success
+string error_code
+string message
+MapInfo map

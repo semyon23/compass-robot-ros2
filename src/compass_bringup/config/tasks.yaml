@@ -1,0 +1,57 @@
+# Задачи task_orchestrator (ROS_INTERFACES.md §4.2). Сервисные цели Compass — только в SERVICE,
+# только с локализацией и без E-stop: допуск проверяет оркестратор по параметрам admission.*,
+# которые выставляет compass_core.
+tasks:
+  - task_name: nav2/navigate_to_pose
+    topic: /navigate_to_pose
+    msg_interface: nav2_msgs/action/NavigateToPose
+    task_server_type: action
+    blocking: true
+    cancel_on_stop: true
+    reentrant: false
+    task_group: navigation
+    resources: [base]
+    server_timeout: 5.0
+    result_timeout: 0.0        # без лимита: длинные маршруты
+    cancel_timeout: 5.0
+    admission:
+      allowed_robot_modes: [SERVICE]
+      requires_localization: true
+      allow_emergency_stop: false
+    tags: [nav2, motion]
+
+  - task_name: nav2/follow_waypoints
+    topic: /follow_waypoints
+    msg_interface: nav2_msgs/action/FollowWaypoints
+    task_server_type: action
+    blocking: true
+    cancel_on_stop: true
+    reentrant: false
+    task_group: navigation
+    resources: [base]
+    server_timeout: 5.0
+    result_timeout: 0.0
+    cancel_timeout: 5.0
+    admission:
+      allowed_robot_modes: [SERVICE]
+      requires_localization: true
+      allow_emergency_stop: false
+    tags: [nav2, motion]
+
+  - task_name: nav2/navigate_through_poses
+    topic: /navigate_through_poses
+    msg_interface: nav2_msgs/action/NavigateThroughPoses
+    task_server_type: action
+    blocking: true
+    cancel_on_stop: true
+    reentrant: false
+    task_group: navigation
+    resources: [base]
+    server_timeout: 5.0
+    result_timeout: 0.0
+    cancel_timeout: 5.0
+    admission:
+      allowed_robot_modes: [SERVICE]
+      requires_localization: true
+      allow_emergency_stop: false
+    tags: [nav2, motion]

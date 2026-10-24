@@ -1,0 +1,7 @@
+# /compass/config/* — схема конфига задаётся роботом, поэтому JSON внутри строки (ROS_INTERFACES.md §3.5).
+string request_json
+---
+bool success
+string error_code                # INVALID_INPUT, CONFLICT, NOT_FOUND, …
+string message
+string response_json             # при INVALID_INPUT — { "errors": { ключ: { code, message, … } } }

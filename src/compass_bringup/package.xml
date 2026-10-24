@@ -14,6 +14,7 @@
   <exec_depend>compass_core</exec_depend>
   <exec_depend>twist_mux</exec_depend>
   <exec_depend>rosbridge_server</exec_depend>
+  <exec_depend>compass_web</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>task_orchestrator_core</exec_depend>

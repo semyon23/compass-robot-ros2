@@ -1,0 +1,10 @@
+# Веб-сервер Compass (пакет compass_web) — вместо nginx: UI, файлы карт и логов, прокси к rosbridge.
+# data_dir — из аргумента robot.launch.py (общий с compass_core).
+compass_web:
+  ros__parameters:
+    port: 8080                          # на роботе 80 — нужен CAP_NET_BIND_SERVICE в unit-файле systemd
+    address: "0.0.0.0"
+    ui_dir: "~/compass/compass-ui/dist" # собранный UI (npm run build); на роботе — свой путь
+    rosbridge_url: "ws://127.0.0.1:9090"
+    ros_log_dir: ""                     # пусто — $ROS_LOG_DIR, иначе ~/.ros/log
+    max_upload_mb: 200                  # предел файла при импорте карты

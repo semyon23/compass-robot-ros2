@@ -1,0 +1,17 @@
+# Кто управляет скоростью: джойстик Compass приоритетнее Nav2.
+# timeout — сторожевой таймер: нет команд 0.5 с — вход отключается, робот стоит.
+twist_mux:
+  ros__parameters:
+    # По умолчанию twist_mux 4.x ждёт TwistStamped; у нас везде Twist (Nav2, симуляция, compass_core).
+    use_stamped: false
+    topics:
+      navigation:
+        # Выход Nav2 после velocity_smoother и collision_monitor (config/nav2.yaml).
+        # Не cmd_vel_nav: так Nav2 внутри называет сырой выход контроллера.
+        topic: cmd_vel_auto
+        timeout: 0.5
+        priority: 10
+      teleop:
+        topic: cmd_vel_teleop
+        timeout: 0.5
+        priority: 100

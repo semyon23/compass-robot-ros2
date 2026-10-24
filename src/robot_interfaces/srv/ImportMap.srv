@@ -1,0 +1,9 @@
+# /compass/maps/import — зарегистрировать файлы, загруженные в uploads/{upload_id}/:
+# map.yaml + map.pgm, по желанию map.posegraph + map.data.
+string upload_id
+string name
+---
+bool success
+string error_code
+string message
+MapInfo map

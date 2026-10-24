@@ -1,0 +1,11 @@
+# /compass/nav/start — сервисная цель или маршрут (только SERVICE, только владелец аренды).
+# Прежняя цель Compass отменяется. Ответ — когда task_orchestrator начал задачу или отказал.
+string lease_id
+string kind                      # goal | route
+string mode                      # waypoints | through_poses (для route)
+Pose2D[] poses                   # 1..100, фрейм map
+---
+bool success
+string error_code
+string message
+string goal_id

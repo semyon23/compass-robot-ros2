@@ -1,0 +1,10 @@
+# /compass/logs/history — последние записи /rosout уровня WARN и выше, которые compass_core
+# держит в памяти (до 1000). Новые в конце. stamp — время получения по часам робота
+# (в симуляции ноды ставят sim time, его в UI не показать).
+uint8 min_level                  # 30 (WARN) и выше; меньше — как 30
+uint32 limit                     # 0 — все
+---
+bool success
+string error_code
+string message
+rcl_interfaces/Log[] entries

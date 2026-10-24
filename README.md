@@ -16,7 +16,7 @@ ROS 2 workspace со всем, что работает на ПК робота: �
    Compass UI (браузер)                                    fms
           │ HTTP + WebSocket                                │ MQTT, VDA 5050 v3
 ┌─────────┼──────────────── ПК робота ──────────────────────┼─────────────────┐
-│  nginx ─┴─ /rosbridge ─► rosbridge (apt)                  │                 │
+│  compass_web ┴ /rosbridge ─► rosbridge (apt)              │                 │
 │                               │ ROS 2                     │                 │
 │     compass_core ◄────────────┘           vda5050_adapter ┘                 │
 │     режим работы, карты, конфиг,  ──/robot/operating_mode──►                 │
@@ -29,7 +29,7 @@ ROS 2 workspace со всем, что работает на ПК робота: �
 ```
 
 - **Compass** обслуживает робота: картографирование, ручное управление, настройки. Подключается
-  к роботу по WebSocket через nginx.
+  к роботу по HTTP и WebSocket через `compass_web` — свой веб-сервер, nginx не нужен.
 - **fms** управляет флотом: шлёт order'а по VDA 5050, агент едет строго по рёбрам графа.
 - **Кто командует роботом**, решает режим работы — `operatingMode` из VDA 5050:
 
@@ -47,9 +47,10 @@ ROS 2 workspace со всем, что работает на ПК робота: �
 
 | Пакет | Что | Состояние |
 |---|---|---|
-| `robot_interfaces` | общие msg/srv: режим, статус, аренда управления, джойстик, поза, скан, карты, навигация | ✅ срез 3 |
-| `compass_core` | сервисная часть: режим работы, статус, аренда управления, джойстик, поза, скан, картографирование, библиотека карт, активная карта и локализация, сервисные цели через task_orchestrator; SLAM и Nav2 — дочерними процессами (дальше — конфиг, агент VDA) | ✅ срез 3 |
-| `compass_bringup` | launch: `robot.launch.py` (compass_core, twist_mux, rosbridge), `slam.launch.py` и `nav.launch.py` (SLAM / map_server + AMCL + Nav2 — запускает compass_core), task_orchestrator и `sim.launch.py` (+ TurtleBot4 в Gazebo) | ✅ срез 3 |
+| `robot_interfaces` | общие msg/srv: режим, статус, аренда управления, джойстик, поза, скан, карты, навигация, журнал, настройки | ✅ этап 4 |
+| `compass_core` | сервисная часть: режим работы, статус, аренда управления, джойстик, поза, скан, картографирование, библиотека карт, активная карта и локализация, сервисные цели через task_orchestrator; журнал WARN+, настройки робота (`robot.yaml`); SLAM и Nav2 — дочерними процессами | ✅ этап 4 |
+| `compass_web` | веб-сервер Compass вместо nginx: статика UI, `/files`, прокси `/rosbridge` (Tornado из зависимостей rosbridge) | ✅ |
+| `compass_bringup` | launch: `robot.launch.py` (compass_core, twist_mux, rosbridge, compass_web), `slam.launch.py` и `nav.launch.py` (SLAM / map_server + AMCL + Nav2 — запускает compass_core), task_orchestrator и `sim.launch.py` (+ TurtleBot4 в Gazebo) | ✅ срез 3 |
 | `vda5050_ros2` | агент VDA 5050 (ядро — из симулятора fms) | впереди |
 | `third_party/ros2_task_orchestrator` | 1.0.0 — исполнитель задач | ✅ собирается |
 
@@ -83,6 +84,9 @@ ros2 launch compass_bringup sim.launch.py headless:=True
 
 TurtleBot4 в Gazebo (без Nav2), `compass_core`, twist_mux и rosbridge на `127.0.0.1:9090`.
 Карты — в `~/.local/share/compass/maps` (на роботе — `/var/lib/robot/maps`, параметр `data_dir`).
+Compass — `http://localhost:8080`: собранный UI (`npm run build` в `~/compass/compass-ui`) отдаёт
+`compass_web`, порт и путь к UI — в `compass_bringup/config/compass_web.yaml`. Для разработки UI —
+`npm run dev` (http://localhost:5176), он проксирует на тот же `compass_web`.
 rosbridge — из apt (`ros-jazzy-rosbridge-server`): версия из исходников (4.2.1) не работает на Jazzy.
 `headless` — `True`/`False` с заглавной буквы.
 
@@ -140,11 +144,8 @@ rosdep install --from-paths src --ignore-src -r -y
    sudo systemd-tmpfiles --clean   # проверить сразу
    ```
    На машине разработчика то же для `~/.ros/log`: `find ~/.ros/log -mtime +14 -delete`.
-4. nginx отдаёт логи Compass («Журнал → Скачать логи робота»), каталоги — JSON-листингом:
-   ```nginx
-   location /files/logs/    { alias /var/lib/robot/logs/;    autoindex on; autoindex_format json; }
-   location /files/ros_log/ { alias /var/lib/robot/ros_log/; autoindex on; autoindex_format json; }
-   ```
+4. Логи отдаёт `compass_web` («Журнал → Скачать логи робота»): `ros_log_dir` в
+   `compass_web.yaml` пустой — берётся `$ROS_LOG_DIR` из п. 2.
 
 ## Документация
 
