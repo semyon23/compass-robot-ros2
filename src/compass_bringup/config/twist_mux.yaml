@@ -2,8 +2,8 @@
 # timeout — сторожевой таймер: нет команд 0.5 с — вход отключается, робот стоит.
 twist_mux:
   ros__parameters:
-    # По умолчанию twist_mux 4.x ждёт TwistStamped; у нас везде Twist (Nav2, симуляция, compass_core).
-    use_stamped: false
+    # use_stamped (Twist или TwistStamped на входах и выходе) задаёт core.launch.py по флагу
+    # cmd_vel_stamped в compass_core.yaml робота.
     topics:
       navigation:
         # Выход Nav2 после velocity_smoother и collision_monitor (config/nav2.yaml).
@@ -15,3 +15,10 @@ twist_mux:
         topic: cmd_vel_teleop
         timeout: 0.5
         priority: 100
+    # СТОП из Compass: пока true — всё с приоритетом ниже 255 (джойстик, Nav2) заблокировано.
+    # Публикует compass_core (std_msgs/Bool), снимается кнопкой в Compass.
+    locks:
+      stop:
+        topic: compass_stop_lock
+        timeout: 0.0
+        priority: 255

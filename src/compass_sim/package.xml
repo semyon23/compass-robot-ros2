@@ -3,7 +3,7 @@
 <package format="3">
   <name>compass_sim</name>
   <version>0.1.0</version>
-  <description>Разработка без робота: TurtleBot4 в Gazebo + сервисная часть Compass. На робот не ставится.</description>
+  <description>Разработка без робота: TurtleBot4 в Gazebo + Compass. config/ — конфиги робота TurtleBot4, образец для своего робота. На робот не ставится.</description>
   <maintainer email="semen@example.com">semen</maintainer>
   <license>Proprietary</license>
 

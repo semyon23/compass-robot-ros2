@@ -105,10 +105,11 @@ void CompassCore::push_nav_limits()
   if (!smoother_params_->service_is_ready()) {
     return;
   }
-  const double lin = max_linear_, ang = max_angular_;
+  // Вбок — тот же предел, что вперёд; у неголономного робота y всегда 0.
+  const double lin = max_linear_, lat = holonomic_ ? max_linear_ : 0.0, ang = max_angular_;
   smoother_params_->set_parameters({
-    rclcpp::Parameter("max_velocity", std::vector<double>{lin, 0.0, ang}),
-    rclcpp::Parameter("min_velocity", std::vector<double>{-lin, 0.0, -ang}),
+    rclcpp::Parameter("max_velocity", std::vector<double>{lin, lat, ang}),
+    rclcpp::Parameter("min_velocity", std::vector<double>{-lin, -lat, -ang}),
   });
 }
 

@@ -50,8 +50,8 @@ ROS 2 workspace со всем, что работает на ПК робота: �
 | `robot_interfaces` | общие msg/srv: режим, статус, аренда управления, джойстик, поза, скан, карты, навигация, журнал, настройки | ✅ этап 4 |
 | `compass_core` | сервисная часть: режим работы, статус, аренда управления, джойстик, поза, скан, картографирование, библиотека карт, активная карта и локализация, сервисные цели через task_orchestrator; журнал WARN+, настройки робота (`robot.yaml`); SLAM и Nav2 — дочерними процессами | ✅ этап 4 |
 | `compass_web` | веб-сервер Compass вместо nginx: статика UI, `/files`, прокси `/rosbridge` (Tornado из зависимостей rosbridge) | ✅ |
-| `compass_bringup` | launch: `robot.launch.py` (compass_core, twist_mux, rosbridge, compass_web), `slam.launch.py` и `nav.launch.py` (SLAM / map_server + AMCL + Nav2 — запускает compass_core), конфиги (Nav2, slam_toolbox, rosbridge, задачи, схема настроек) | ✅ этап 4 |
-| `compass_sim` | `sim.launch.py`: TurtleBot4 в Gazebo + `robot.launch.py`. Только для разработки, на робот не копируется | ✅ |
+| `compass_bringup` | общее для любого робота. launch: `compass.launch.py` = `core.launch.py` (compass_core, task_orchestrator, twist_mux) + `web.launch.py` (rosbridge, compass_web); `slam.launch.py` и `nav.launch.py` запускает compass_core. Конфиги Compass: rosbridge, twist_mux, задачи, схема настроек | ✅ |
+| `compass_sim` | `sim.launch.py`: TurtleBot4 в Gazebo + `compass.launch.py`; `config/` — конфиги робота TurtleBot4, **образец для своего робота**. На робот не копируется | ✅ |
 | `vda5050_ros2` | агент VDA 5050 (ядро — из симулятора fms) | впереди |
 | `third_party/ros2_task_orchestrator` | 1.0.0 — исполнитель задач | ✅ собирается |
 
@@ -123,9 +123,30 @@ rosdep install --from-paths src --ignore-src -r -y
 
 Дальше — сборка, как выше.
 
+### Compass на своём роботе
+
+Compass запускает SLAM и навигацию сам, а **драйверы робота — отдельно**: база (ros2_control),
+лидар, robot_state_publisher. От них Compass ждёт TF `odom → base_link` и `base_link → лидар`,
+топики лидара и одометрии и приём скорости `geometry_msgs/Twist`.
+
+1. Каталог конфигов робота: скопировать `src/compass_sim/config/` (например, в пакет робота или
+   в `/etc/compass/robot/`) и поправить по `README.md` в нём: фреймы и топики, футпринт и
+   скорости в `nav2.yaml`, лидар в `slam_toolbox.yaml`, порт и путь к UI в `compass_web.yaml`.
+2. Запуск — после драйверов:
+   ```bash
+   ros2 launch compass_bringup compass.launch.py robot_config:=/etc/compass/robot cmd_vel_topic:=/diff_drive_controller/cmd_vel
+   ```
+   `cmd_vel_topic` — куда база принимает скорость. Тип задаёт `cmd_vel_stamped` в
+   `compass_core.yaml` робота: `true` — `TwistStamped` (ros2_control в Jazzy) у джойстика и
+   twist_mux; у Nav2 тогда `enable_stamped_cmd_vel: True` в `nav2.yaml`. `holonomic: true` —
+   робот ездит боком (меканум, омни): джойстик «вбок» в Compass и лимит Nav2 по y.
+   Ядро и веб можно запускать отдельно: `core.launch.py` и `web.launch.py` с теми же аргументами —
+   веб-часть тогда перезапускается, не трогая робота.
+3. Сервисы systemd — по слоям: драйверы робота → `core.launch.py` → `web.launch.py`.
+
 ### Каталог данных и логи
 
-Всё, что робот накапливает, лежит в `/var/lib/robot` (параметр `data_dir` в `robot.launch.py`):
+Всё, что робот накапливает, лежит в `/var/lib/robot` (аргумент `data_dir` в `compass.launch.py`):
 карты и загрузки, история задач `tasks.db`, журнал compass_core `logs/` (WARN и выше со всех нод,
 файл на день, 7 дней — чистит сам) и логи ROS `ros_log/`. Ниже `robot` — пользователь, от
 которого запускается сервисная часть.

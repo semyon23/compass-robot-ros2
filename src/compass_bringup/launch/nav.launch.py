@@ -1,7 +1,7 @@
 """Локализация и навигация на карте: map_server + AMCL сразу, Nav2 — после начальной позы.
 
 Запускает compass_core дочерним процессом при активации карты, вручную не нужен.
-map — путь к map.yaml активной карты.
+map — путь к map.yaml активной карты, params_file — nav2.yaml из каталога конфигов робота.
 """
 import os
 
@@ -14,16 +14,16 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     nav2 = os.path.join(get_package_share_directory('nav2_bringup'), 'launch')
-    params = os.path.join(get_package_share_directory('compass_bringup'), 'config', 'nav2.yaml')
     common = {
         'use_sim_time': LaunchConfiguration('use_sim_time'),
-        'params_file': params,
+        'params_file': LaunchConfiguration('params_file'),
         'autostart': 'true',
     }
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('map'),
+        DeclareLaunchArgument('params_file'),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(nav2, 'localization_launch.py')),

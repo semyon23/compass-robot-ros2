@@ -1,0 +1,7 @@
+# /compass/events/history — последние события (лента Compass после перезагрузки страницы).
+uint16 limit                     # 0 — все, что хранит compass_core (до 200)
+---
+bool success
+string error_code
+string message
+Event[] events                   # новые первыми

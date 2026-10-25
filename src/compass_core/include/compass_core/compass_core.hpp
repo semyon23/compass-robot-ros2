@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deque>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -10,6 +12,7 @@
 #include <nav2_msgs/srv/manage_lifecycle_nodes.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rcl_interfaces/msg/log.hpp>
@@ -19,6 +22,7 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <slam_toolbox/srv/pause.hpp>
 #include <slam_toolbox/srv/serialize_pose_graph.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -42,6 +46,7 @@
 #include <robot_interfaces/srv/acquire_control.hpp>
 #include <robot_interfaces/srv/activate_map.hpp>
 #include <robot_interfaces/srv/delete_map.hpp>
+#include <robot_interfaces/srv/get_events.hpp>
 #include <robot_interfaces/srv/get_info.hpp>
 #include <robot_interfaces/srv/get_logs.hpp>
 #include <robot_interfaces/srv/import_map.hpp>
@@ -76,6 +81,7 @@ private:
   using ReleaseControl = robot_interfaces::srv::ReleaseControl;
   using GetInfo = robot_interfaces::srv::GetInfo;
   using GetLogs = robot_interfaces::srv::GetLogs;
+  using GetEvents = robot_interfaces::srv::GetEvents;
   using Log = rcl_interfaces::msg::Log;
   using Trigger = std_srvs::srv::Trigger;
   using SetBool = std_srvs::srv::SetBool;
@@ -109,6 +115,8 @@ private:
   void emit_event(const std::string & level, const std::string & code, const std::string & message,
                   const Details & details = {});
   void on_get_info(GetInfo::Request::SharedPtr req, GetInfo::Response::SharedPtr res);
+  void load_events();  // последние события из {data_dir}/events.jsonl — лента переживает перезапуск
+  void on_get_events(GetEvents::Request::SharedPtr req, GetEvents::Response::SharedPtr res);
 
   // Журнал: WARN+ из /rosout в памяти и в {data_dir}/logs — UI видит, что было, пока Compass
   // не был открыт, в том числе до перезапуска compass_core.
@@ -120,7 +128,10 @@ private:
   void on_release(ReleaseControl::Request::SharedPtr req, ReleaseControl::Response::SharedPtr res);
   void on_teleop(const robot_interfaces::msg::TeleopCommand & msg);
   void on_stop(Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
+  void on_stop_release(Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
+  void publish_stop_lock();
   void check_lease();
+  void publish_cmd(double linear, double lateral, double angular);  // Twist или TwistStamped
   void publish_zero();
 
   // Поза и скан
@@ -188,8 +199,11 @@ private:
   std::string robot_name_, serial_number_, manufacturer_, model_;
   std::string map_frame_, odom_frame_, base_frame_;
   double max_linear_, max_angular_;
+  bool cmd_vel_stamped_;  // база ждёт TwistStamped (ros2_control в Jazzy) — так же и twist_mux
+  bool holonomic_;        // ездит боком: джойстик и лимит Nav2 по y
   bool use_sim_time_;
   std::string tasks_template_, tasks_config_;  // tasks.yaml из compass_bringup → {data_dir}/config/tasks.yaml
+  std::string nav_params_, slam_params_;       // nav2.yaml, slam_toolbox.yaml робота — для launch стеков
 
   // ---------- Состояние ----------
   std::string mode_ = "STARTUP";
@@ -200,6 +214,9 @@ private:
   ControlLease::Clock::time_point last_teleop_{};
   bool teleop_moving_ = false;  // последняя команда джойстика была ненулевой
   std::unique_ptr<LogStore> logs_;
+  std::deque<robot_interfaces::msg::Event> events_;  // последние события, новые в конце
+  std::filesystem::path events_file_;
+  bool stopped_ = false;  // СТОП из Compass: twist_mux заблокирован, задачи не принимаются
   std::unique_ptr<ConfigStore> config_;
   bool tasks_reloaded_ = false;      // оркестратор перечитал tasks.yaml с текущим порогом батареи
   bool battery_low_ = false, battery_critical_ = false;
@@ -227,6 +244,7 @@ private:
   // Картографирование и карты
   std::unique_ptr<MapLibrary> maps_;
   std::optional<MapEntry> continue_from_;        // TEACH_IN: достроить эту карту
+  std::optional<robot_interfaces::msg::Pose2D> continue_pose_;  // …начиная с этой позы (иначе — с начала карты)
   robot_interfaces::msg::MapRef map_ref_;        // карта, которую строим; id пустой — новая
   robot_interfaces::msg::MapRef active_map_;     // карта для локализации и навигации
   nav_msgs::msg::OccupancyGrid::SharedPtr map_;  // последняя карта от SLAM
@@ -251,10 +269,12 @@ private:
   rclcpp::Publisher<robot_interfaces::msg::Event>::SharedPtr event_pub_;
   rclcpp::Publisher<robot_interfaces::msg::RobotPose>::SharedPtr pose_pub_;
   rclcpp::Publisher<robot_interfaces::msg::ScanPoints>::SharedPtr scan_pub_;
-  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;                // или
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_stamped_pub_;  // по cmd_vel_stamped_
   rclcpp::Publisher<robot_interfaces::msg::NavStatus>::SharedPtr nav_status_pub_;
   rclcpp::Publisher<PoseCov>::SharedPtr initial_pose_pub_;
   rclcpp::Publisher<robot_interfaces::msg::ConfigChanged>::SharedPtr config_changed_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_lock_pub_;
 
   rclcpp::Subscription<robot_interfaces::msg::TeleopCommand>::SharedPtr teleop_sub_;
   rclcpp::Subscription<robot_interfaces::msg::ControlHeartbeat>::SharedPtr heartbeat_sub_;
@@ -281,6 +301,8 @@ private:
   rclcpp::Service<ReleaseControl>::SharedPtr release_srv_;
   rclcpp::Service<GetInfo>::SharedPtr info_srv_;
   rclcpp::Service<GetLogs>::SharedPtr logs_srv_;
+  rclcpp::Service<GetEvents>::SharedPtr events_srv_;
+  rclcpp::Service<Trigger>::SharedPtr stop_release_srv_;
   rclcpp::Service<Trigger>::SharedPtr ping_srv_;
   rclcpp::Service<Trigger>::SharedPtr stop_srv_;
   rclcpp::Service<SaveMap>::SharedPtr save_srv_;

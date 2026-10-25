@@ -39,6 +39,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/NavStart.srv"
   "srv/GetLogs.srv"
   "srv/JsonCall.srv"
+  "srv/GetEvents.srv"
   DEPENDENCIES builtin_interfaces diagnostic_msgs rcl_interfaces
 )
 

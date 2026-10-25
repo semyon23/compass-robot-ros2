@@ -1,4 +1,4 @@
-"""Разработка без робота: TurtleBot4 в Gazebo + сервисная часть.
+"""Разработка без робота: TurtleBot4 в Gazebo + Compass с конфигами робота из compass_sim/config.
 
 ros2 launch compass_sim sim.launch.py            — с окном Gazebo и RViz
 ros2 launch compass_sim sim.launch.py headless:=True
@@ -17,6 +17,7 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     tb4_sim = os.path.join(get_package_share_directory('nav2_minimal_tb4_sim'), 'launch')
     bringup = os.path.join(get_package_share_directory('compass_bringup'), 'launch')
+    robot_config = os.path.join(get_package_share_directory('compass_sim'), 'config')
 
     return LaunchDescription([
         # True / False с заглавной: simulation.launch.py подставляет значение в Python-выражение.
@@ -28,8 +29,9 @@ def generate_launch_description():
             launch_arguments={'headless': LaunchConfiguration('headless')}.items(),
         ),
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(os.path.join(bringup, 'robot.launch.py')),
+            PythonLaunchDescriptionSource(os.path.join(bringup, 'compass.launch.py')),
             launch_arguments={
+                'robot_config': robot_config,
                 'use_sim_time': 'true',
                 'data_dir': os.path.expanduser('~/.local/share/compass'),
             }.items(),

@@ -2,10 +2,10 @@
 
 map_file — путь к сохранённой карте без расширения (…/maps/{id}/map): достроить её,
 slam_toolbox загрузит map.posegraph + map.data. Пусто — новая карта.
+start_pose — поза робота на этой карте «[x, y, theta]» (робот локализован на ней); без неё
+(start_at_dock:=true) slam_toolbox считает, что робот стоит там, где карту начинали.
+params_file — slam_toolbox.yaml из каталога конфигов робота.
 """
-import os
-
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler
 from launch.events import matches_action
@@ -18,20 +18,19 @@ from lifecycle_msgs.msg import Transition
 
 
 def generate_launch_description():
-    config = os.path.join(get_package_share_directory('compass_bringup'), 'config')
-
     slam = LifecycleNode(
         package='slam_toolbox',
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         namespace='',
         parameters=[
-            os.path.join(config, 'slam_toolbox.yaml'),
+            LaunchConfiguration('params_file'),
             {
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
                 'map_file_name': ParameterValue(LaunchConfiguration('map_file'), value_type=str),
-                # Продолжение: робот стоит там, где начинали эту карту.
-                'map_start_at_dock': True,
+                # Продолжение: с позы локализации или «там, где начинали эту карту».
+                'map_start_at_dock': ParameterValue(LaunchConfiguration('start_at_dock'), value_type=bool),
+                'map_start_pose': LaunchConfiguration('start_pose'),
             },
         ],
         output='screen',
@@ -55,6 +54,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('map_file', default_value=''),
+        DeclareLaunchArgument('start_pose', default_value='[0.0, 0.0, 0.0]'),
+        DeclareLaunchArgument('start_at_dock', default_value='true'),
+        DeclareLaunchArgument('params_file'),
         slam,
         configure,
         activate,

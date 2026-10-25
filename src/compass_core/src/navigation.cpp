@@ -100,6 +100,10 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
     fail(res, "MODE_NOT_ALLOWED", "сервисные цели — только в режиме SERVICE");
     return reply();
   }
+  if (stopped_) {
+    fail(res, "MODE_NOT_ALLOWED", "нажат СТОП — сначала снимите его");
+    return reply();
+  }
   if (!lease_.touch(req->lease_id, ControlLease::Clock::now())) {
     fail(res, "CONTROL_LOCKED", "сначала возьмите управление");
     return reply();
@@ -345,7 +349,8 @@ void CompassCore::update_admission()
   }
   const std::string robot_mode = state_ == "switching" ? "SWITCHING" : mode_;
   const double battery = battery_.present ? battery_.percent : 100.0;
-  const std::string key = robot_mode + "|" + (localized() ? "1" : "0") + "|" + std::to_string(battery);
+  const std::string key = robot_mode + "|" + (localized() ? "1" : "0") + "|" + std::to_string(battery) + "|" +
+                          (stopped_ ? "1" : "0");
   const auto now = ChildProcess::Clock::now();
   if (key == admission_sent_ && now - admission_at_ < 5s) {
     return;
@@ -355,7 +360,7 @@ void CompassCore::update_admission()
   orchestrator_params_->set_parameters({
     rclcpp::Parameter("admission.robot_mode", robot_mode),
     rclcpp::Parameter("admission.localization_ok", localized()),
-    rclcpp::Parameter("admission.emergency_stop_active", false),
+    rclcpp::Parameter("admission.emergency_stop_active", stopped_),
     rclcpp::Parameter("admission.battery_percent", battery),
   });
 }

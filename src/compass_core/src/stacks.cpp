@@ -1,5 +1,6 @@
 #include "compass_core/compass_core.hpp"
 
+#include <cstdio>
 #include <string_view>
 
 using namespace std::chrono_literals;
@@ -90,10 +91,18 @@ void CompassCore::check_stack()
 void CompassCore::start_stack(const std::string & name)
 {
   std::vector<std::string> argv = {"ros2", "launch", "compass_bringup", name + ".launch.py",
-                                   std::string("use_sim_time:=") + (use_sim_time_ ? "true" : "false")};
+                                   std::string("use_sim_time:=") + (use_sim_time_ ? "true" : "false"),
+                                   "params_file:=" + (name == "slam" ? slam_params_ : nav_params_)};
   if (name == "slam" && continue_from_) {
     // slam_toolbox сам допишет .posegraph / .data
     argv.push_back("map_file:=" + (maps_->dir(continue_from_->id) / "map").string());
+    if (continue_pose_) {
+      char pose[96];
+      std::snprintf(pose, sizeof(pose), "start_pose:=[%.4f, %.4f, %.4f]", continue_pose_->x, continue_pose_->y,
+                    continue_pose_->theta);
+      argv.push_back(pose);
+      argv.push_back("start_at_dock:=false");
+    }
   }
   if (name == "nav") {
     argv.push_back("map:=" + (maps_->dir(active_map_.id) / "map.yaml").string());
@@ -218,6 +227,7 @@ void CompassCore::on_stack_exit()
     paused_ = false;
     map_ref_ = robot_interfaces::msg::MapRef{};
     continue_from_.reset();
+    continue_pose_.reset();
     update_switching();
     set_mode("SERVICE");
   } else {

@@ -1,5 +1,5 @@
 # Веб-сервер Compass (пакет compass_web) — вместо nginx: UI, файлы карт и логов, прокси к rosbridge.
-# data_dir — из аргумента robot.launch.py (общий с compass_core).
+# data_dir — из аргумента compass.launch.py (общий с compass_core).
 compass_web:
   ros__parameters:
     port: 8080                          # на роботе 80 — нужен CAP_NET_BIND_SERVICE в unit-файле systemd

@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
+
+#include <nlohmann/json.hpp>
 
 using namespace std::chrono_literals;
 
@@ -22,6 +25,7 @@ constexpr auto kScanPeriod = 200ms;    // скан для UI — 5 Гц
 constexpr std::size_t kScanPoints = 360;
 constexpr std::size_t kLogsKept = 1000;  // WARN+ из /rosout в памяти
 constexpr int kLogDays = 7;              // и столько дней — в файлах
+constexpr std::size_t kEventsKept = 200; // лента событий для UI
 
 }  // namespace
 
@@ -54,10 +58,17 @@ CompassCore::CompassCore() : Node("compass_core")
   base_frame_ = declare_parameter("base_frame", "base_link");
   max_linear_ = declare_parameter("max_linear", 0.5);
   max_angular_ = declare_parameter("max_angular", 1.0);
+  cmd_vel_stamped_ = declare_parameter("cmd_vel_stamped", false);
+  holonomic_ = declare_parameter("holonomic", false);
   use_sim_time_ = get_parameter("use_sim_time").as_bool();  // передаём в launch стеков
+  // Параметры стеков, которые compass_core запускает сам, — из каталога конфигов робота.
+  nav_params_ = declare_parameter("nav_params", "");
+  slam_params_ = declare_parameter("slam_params", "");
   const std::string data_dir = declare_parameter("data_dir", "/var/lib/robot");
   maps_ = std::make_unique<MapLibrary>(data_dir);
   logs_ = std::make_unique<LogStore>(std::filesystem::path(data_dir) / "logs", kLogsKept, kLogDays);
+  events_file_ = std::filesystem::path(data_dir) / "events.jsonl";
+  load_events();
   // Настройки: robot.yaml в {data_dir}/config. Пока его нет — из схемы и из параметров выше.
   const auto config_dir = std::filesystem::path(data_dir) / "config";
   config_ = std::make_unique<ConfigStore>(
@@ -87,10 +98,16 @@ CompassCore::CompassCore() : Node("compass_core")
   event_pub_ = create_publisher<robot_interfaces::msg::Event>("/compass/events", rclcpp::QoS(50).reliable());
   pose_pub_ = create_publisher<robot_interfaces::msg::RobotPose>("/compass/pose", rclcpp::SensorDataQoS().keep_last(1));
   scan_pub_ = create_publisher<robot_interfaces::msg::ScanPoints>("/compass/scan_points", rclcpp::SensorDataQoS().keep_last(1));
-  // Вход teleop в twist_mux.
-  cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel_teleop", rclcpp::QoS(1));
+  // Вход teleop в twist_mux — того же типа, что ждёт twist_mux (use_stamped).
+  if (cmd_vel_stamped_) {
+    cmd_stamped_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel_teleop", rclcpp::QoS(1));
+  } else {
+    cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel_teleop", rclcpp::QoS(1));
+  }
   initial_pose_pub_ = create_publisher<PoseCov>("/initialpose", rclcpp::QoS(1).reliable());
   config_changed_pub_ = create_publisher<robot_interfaces::msg::ConfigChanged>("/compass/config/changed", latched);
+  // Блокировка twist_mux (locks.stop в twist_mux.yaml): true — ни джойстик, ни Nav2 не едут.
+  stop_lock_pub_ = create_publisher<std_msgs::msg::Bool>("compass_stop_lock", latched);
 
   teleop_sub_ = create_subscription<robot_interfaces::msg::TeleopCommand>(
     "/compass/teleop", rclcpp::QoS(1),
@@ -102,14 +119,16 @@ CompassCore::CompassCore() : Node("compass_core")
     });
   // Датчики — best_effort: такой подписчик совместим и с reliable, и с best_effort издателем.
   scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-    "scan", rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::LaserScan & msg) { on_scan(msg); });
+    declare_parameter("scan_topic", "scan"), rclcpp::SensorDataQoS(),
+    [this](const sensor_msgs::msg::LaserScan & msg) { on_scan(msg); });
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-    "odom", rclcpp::SensorDataQoS(), [this](const nav_msgs::msg::Odometry & msg) {
+    declare_parameter("odom_topic", "odom"), rclcpp::SensorDataQoS(), [this](const nav_msgs::msg::Odometry & msg) {
       linear_ = msg.twist.twist.linear.x;
       angular_ = msg.twist.twist.angular.z;
     });
   battery_sub_ = create_subscription<sensor_msgs::msg::BatteryState>(
-    "battery_state", rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::BatteryState & msg) {
+    declare_parameter("battery_topic", "battery_state"), rclcpp::SensorDataQoS(),
+    [this](const sensor_msgs::msg::BatteryState & msg) {
       battery_.present = true;
       battery_.percent = std::isnan(msg.percentage) ? 0.0f : msg.percentage * 100.0f;  // в BatteryState 0..1
       battery_.voltage = msg.voltage;
@@ -148,6 +167,10 @@ CompassCore::CompassCore() : Node("compass_core")
   ping_srv_ = create_service<Trigger>(
     "/compass/ping", [](Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res) { res->success = true; });
   stop_srv_ = create_service<Trigger>("/compass/stop", std::bind(&CompassCore::on_stop, this, _1, _2));
+  stop_release_srv_ = create_service<Trigger>(
+    "/compass/stop/release", std::bind(&CompassCore::on_stop_release, this, _1, _2));
+  events_srv_ = create_service<GetEvents>(
+    "/compass/events/history", std::bind(&CompassCore::on_get_events, this, _1, _2));
   // save, set_paused и nav/start отвечают позже — когда ответят slam_toolbox или оркестратор:
   // обработчик не ждёт, ответ уходит из колбэка клиента (send_response).
   save_srv_ = create_service<SaveMap>(
@@ -252,6 +275,17 @@ void CompassCore::on_set_mode(SetOperatingMode::Request::SharedPtr req, SetOpera
     }
     cancel_goal();
     continue_from_ = base;
+    // Достраиваем активную карту, а робот на ней локализован — SLAM стартует с его текущей позы.
+    // Иначе slam_toolbox считает, что робот стоит там, где эту карту начинали.
+    continue_pose_.reset();
+    geometry_msgs::msg::TransformStamped tf;
+    std::string frame;
+    if (base && base->id == active_map_.id && localized() && lookup(base_frame_, frame, tf) && frame == map_frame_) {
+      continue_pose_.emplace();
+      continue_pose_->x = tf.transform.translation.x;
+      continue_pose_->y = tf.transform.translation.y;
+      continue_pose_->theta = yaw_of(tf.transform.rotation);
+    }
     map_ref_ = robot_interfaces::msg::MapRef{};
     if (base) {
       map_ref_.id = base->id;
@@ -283,7 +317,7 @@ void CompassCore::publish_status()
   s.battery = battery_;
   s.control.holder_id = lease_.holder_id();
   s.control.holder_name = lease_.holder_name();
-  s.estop = false;  // сигнала e-stop пока нет (вопрос в контракте)
+  s.estop = stopped_;  // программный СТОП из Compass; аппаратного сигнала пока нет
   s.mapping.active = mode_ == "TEACH_IN";
   s.mapping.paused = paused_;
   s.mapping.unsaved_changes = s.mapping.active && map_hash_ != saved_hash_;
@@ -301,6 +335,7 @@ void CompassCore::publish_status()
     add_stack("navigation", stack_state_ == "running" && !navigation_up_ ? "starting" : stack_state_);
   }
   status_pub_->publish(s);
+  publish_stop_lock();  // и раз в секунду: twist_mux мог перезапуститься и не знать о СТОП
   update_admission();
   reload_tasks();
 }
@@ -309,7 +344,8 @@ void CompassCore::emit_event(const std::string & level, const std::string & code
                              const std::string & message, const Details & details)
 {
   robot_interfaces::msg::Event e;
-  e.stamp = now();
+  // Время по часам робота, а не sim time: события читает человек, лента хранится между запусками.
+  e.stamp = rclcpp::Clock(RCL_SYSTEM_TIME).now();
   e.id = std::to_string(rclcpp::Time(e.stamp).nanoseconds());  // уникален и после перезапуска
   e.level = level;
   e.code = code;
@@ -321,6 +357,69 @@ void CompassCore::emit_event(const std::string & level, const std::string & code
     e.details.push_back(kv);
   }
   event_pub_->publish(e);
+
+  events_.push_back(e);
+  if (events_.size() > kEventsKept) {
+    events_.pop_front();
+  }
+  nlohmann::json kv_json = nlohmann::json::object();
+  for (const auto & kv : e.details) {
+    kv_json[kv.key] = kv.value;
+  }
+  std::ofstream(events_file_, std::ios::app)
+    << nlohmann::json{{"id", e.id}, {"sec", e.stamp.sec}, {"nanosec", e.stamp.nanosec}, {"level", level},
+                      {"code", code}, {"message", message}, {"details", kv_json}}.dump()
+    << "\n";
+}
+
+// Лента событий с диска. Файл растёт, поэтому при старте оставляем в нём только последние kEventsKept.
+void CompassCore::load_events()
+{
+  std::ifstream in(events_file_);
+  std::vector<std::string> lines;
+  for (std::string line; std::getline(in, line);) {
+    lines.push_back(line);
+  }
+  if (lines.size() > kEventsKept) {
+    lines.erase(lines.begin(), lines.end() - kEventsKept);
+    std::ofstream out(events_file_);
+    for (const auto & line : lines) {
+      out << line << "\n";
+    }
+  }
+  for (const auto & line : lines) {
+    const auto j = nlohmann::json::parse(line, nullptr, false);
+    if (j.is_discarded()) {
+      continue;
+    }
+    robot_interfaces::msg::Event e;
+    e.id = j.value("id", "");
+    e.stamp.sec = j.value("sec", 0);
+    e.stamp.nanosec = j.value("nanosec", 0u);
+    e.level = j.value("level", "");
+    e.code = j.value("code", "");
+    e.message = j.value("message", "");
+    // Сначала в переменную: items() от временного объекта перебирал бы уже освобождённую память.
+    const nlohmann::json details = j.value("details", nlohmann::json::object());
+    for (const auto & [key, value] : details.items()) {
+      diagnostic_msgs::msg::KeyValue kv;
+      kv.key = key;
+      kv.value = value.is_string() ? value.get<std::string>() : value.dump();
+      e.details.push_back(kv);
+    }
+    events_.push_back(e);
+  }
+}
+
+void CompassCore::on_get_events(GetEvents::Request::SharedPtr req, GetEvents::Response::SharedPtr res)
+{
+  for (auto it = events_.rbegin(); it != events_.rend(); ++it) {
+    if (req->limit > 0 && res->events.size() >= req->limit) {
+      break;
+    }
+    res->events.push_back(*it);
+  }
+  res->success = true;
 }
 
 void CompassCore::on_get_info(GetInfo::Request::SharedPtr, GetInfo::Response::SharedPtr res)
@@ -339,6 +438,9 @@ void CompassCore::on_get_info(GetInfo::Request::SharedPtr, GetInfo::Response::Sh
   }
   // UI показывает только то, что робот умеет.
   res->capabilities = {"scan_stream", "mapping", "continue_mapping", "navigation"};
+  if (holonomic_) {
+    res->capabilities.push_back("holonomic");  // UI показывает джойстик «вбок»
+  }
 }
 
 // ---------- Журнал ----------
@@ -418,12 +520,12 @@ void CompassCore::on_teleop(const robot_interfaces::msg::TeleopCommand & msg)
     RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Джойстик без действующей аренды — игнорирую");
     return;
   }
-  geometry_msgs::msg::Twist t;
-  t.linear.x = std::clamp(static_cast<double>(msg.linear), -max_linear_, max_linear_);
-  t.angular.z = std::clamp(static_cast<double>(msg.angular), -max_angular_, max_angular_);
-  cmd_pub_->publish(t);
+  const double linear = std::clamp(static_cast<double>(msg.linear), -max_linear_, max_linear_);
+  const double lateral = holonomic_ ? std::clamp(static_cast<double>(msg.lateral), -max_linear_, max_linear_) : 0.0;
+  const double angular = std::clamp(static_cast<double>(msg.angular), -max_angular_, max_angular_);
+  publish_cmd(linear, lateral, angular);
   last_teleop_ = ControlLease::Clock::now();
-  teleop_moving_ = t.linear.x != 0.0 || t.angular.z != 0.0;
+  teleop_moving_ = linear != 0.0 || lateral != 0.0 || angular != 0.0;
   // Оператор взялся за джойстик — сервисная цель отменяется: twist_mux отдал бы скорость
   // джойстику, но Nav2 продолжал бы считать, что едет к цели.
   if (teleop_moving_) {
@@ -431,11 +533,35 @@ void CompassCore::on_teleop(const robot_interfaces::msg::TeleopCommand & msg)
   }
 }
 
+// СТОП: twist_mux блокирует все входы скорости, задачи отменяются, новые не принимаются
+// (status.estop, допуск оркестратора), пока оператор не снимет СТОП в Compass.
 void CompassCore::on_stop(Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res)
 {
   publish_zero();
-  stop_tasks();  // все задачи с cancel_on_stop — в том числе цели Compass
+  stop_tasks();  // все задачи с cancel_on_stop — в том числе цели Compass и агента
+  if (!stopped_) {
+    stopped_ = true;
+    emit_event("warning", "STOP_PRESSED", "Stop pressed");
+  }
+  publish_status();
   res->success = true;
+}
+
+void CompassCore::on_stop_release(Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res)
+{
+  if (stopped_) {
+    stopped_ = false;
+    emit_event("info", "STOP_RELEASED", "Stop released");
+  }
+  publish_status();
+  res->success = true;
+}
+
+void CompassCore::publish_stop_lock()
+{
+  std_msgs::msg::Bool lock;
+  lock.data = stopped_;
+  stop_lock_pub_->publish(lock);
 }
 
 void CompassCore::check_lease()
@@ -453,9 +579,26 @@ void CompassCore::check_lease()
   }
 }
 
+void CompassCore::publish_cmd(double linear, double lateral, double angular)
+{
+  geometry_msgs::msg::Twist t;
+  t.linear.x = linear;
+  t.linear.y = lateral;
+  t.angular.z = angular;
+  if (cmd_stamped_pub_) {
+    geometry_msgs::msg::TwistStamped ts;
+    ts.header.stamp = now();
+    ts.header.frame_id = base_frame_;
+    ts.twist = t;
+    cmd_stamped_pub_->publish(ts);
+  } else {
+    cmd_pub_->publish(t);
+  }
+}
+
 void CompassCore::publish_zero()
 {
-  cmd_pub_->publish(geometry_msgs::msg::Twist{});
+  publish_cmd(0.0, 0.0, 0.0);
   teleop_moving_ = false;
 }
 
