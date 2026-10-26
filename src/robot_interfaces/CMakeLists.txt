@@ -26,6 +26,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/StackState.msg"
   "msg/NavStatus.msg"
   "msg/ConfigChanged.msg"
+  "msg/VdaStatus.msg"
   "srv/SetOperatingMode.srv"
   "srv/GetInfo.srv"
   "srv/AcquireControl.srv"
