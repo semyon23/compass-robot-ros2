@@ -1,0 +1,30 @@
+# Агент VDA 5050 (vda5050_ros2). Пароль брокера — переменная окружения MQTT_PASS, не здесь.
+vda5050_adapter:
+  ros__parameters:
+    broker_host: "127.0.0.1"
+    broker_port: 1883
+    broker_user: ""               # пусто — без логина (локальный mosquitto)
+    interface_name: "amr"         # топики amr/v3/<manufacturer>/<serial_number>/...
+    manufacturer: "compass"
+    serial_number: "sim-001"
+    visualization_interval: 0.5   # с
+    simulated_action: true        # action «simulatedAction» для тестов fms без механизмов
+
+    factsheet:
+      series_name: "TurtleBot4 (sim)"
+      kinematics: "DIFFERENTIAL"  # меканум — OMNIDIRECTIONAL
+      robot_class: "CARRIER"
+      maximum_load_mass: 0.0      # кг
+      # Скорости — как у Nav2 (nav2.yaml): по ним fms считает время пути.
+      minimum_speed: 0.05         # м/с
+      maximum_speed: 0.5
+      maximum_angular_speed: 1.0  # рад/с
+      maximum_acceleration: 0.5   # м/с²
+      maximum_deceleration: 0.5
+      length: 0.35                # м
+      width: 0.35
+      minimum_height: 0.35
+      maximum_height: 0.35
+      battery_critical_low: 10.0  # %
+      battery_minimum_desired: 30.0
+      battery_maximum_desired: 90.0
