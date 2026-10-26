@@ -295,9 +295,21 @@ void CompassCore::on_set_mode(SetOperatingMode::Request::SharedPtr req, SetOpera
     update_switching();
     return publish_status();
   }
-  // AUTOMATIC и INTERVENED появятся вместе с агентом VDA.
-  if (m != "SERVICE" && m != "MANUAL") {
-    return fail(res, "MODE_NOT_ALLOWED", "режим " + m + " пока не поддерживается");
+  // «Передать fms»: командует агент VDA (условия — ROS_INTERFACES.md, «Режим работы»).
+  // «Перехватить»: INTERVENED, если у агента есть order, иначе MANUAL — выбирает UI.
+  if (m == "AUTOMATIC") {
+    if (!navigation_up_ || !localized()) {
+      return fail(res, "MODE_NOT_ALLOWED", "нужны запущенная навигация и локализация на карте");
+    }
+    if (stopped_) {
+      return fail(res, "MODE_NOT_ALLOWED", "снимите СТОП");
+    }
+    if (nav_.state == "active") {
+      return fail(res, "MODE_NOT_ALLOWED", "робот выполняет сервисную цель — отмените её");
+    }
+  } else if (m == "INTERVENED" && mode_ != "AUTOMATIC") {
+    // «Перехватить» посреди order'а: агент стоит, order fms сохраняется до «Передать fms».
+    return fail(res, "MODE_NOT_ALLOWED", "вмешательство — только из режима работы с fms");
   }
   set_mode(m);
 }

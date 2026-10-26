@@ -51,8 +51,8 @@ json pose_stamped(const robot_interfaces::msg::Pose2D & p)
 
 void CompassCore::on_amcl_pose(const PoseCov & msg)
 {
-  if (stack_name_ != "nav" || stack_state_ != "running") {
-    return;
+  if (stack_name_ != "nav" || stack_state_ != "running" || restart_stack_) {
+    return;  // restart_stack_ — это поза старого AMCL, карта уже другая
   }
   const auto & c = msg.pose.covariance;
   const double sxy = std::sqrt(std::max(c[0], c[7]));

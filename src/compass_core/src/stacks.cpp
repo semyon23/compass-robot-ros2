@@ -243,7 +243,8 @@ void CompassCore::on_stack_exit()
 // switching — пока меняем режим со сменой стека или (пере)запускаем стек.
 void CompassCore::update_switching()
 {
-  const bool busy = !pending_mode_.empty() || stack_state_ == "starting" || stack_state_ == "stopping";
+  const bool busy = !pending_mode_.empty() || restart_stack_ || stack_state_ == "starting" ||
+    stack_state_ == "stopping";
   if (!busy) {
     state_ = "ready";
     transition_ = robot_interfaces::msg::Transition{};
@@ -479,6 +480,11 @@ void CompassCore::on_activate(ActivateMap::Request::SharedPtr req, ActivateMap::
     set_active_map(ref);
     nav_failed_ = false;
     restart_stack_ = stack_name_ == "nav" && stack_.running();
+    // Статус сразу про новую карту: локализации на ней ещё нет. Иначе до остановки старого стека
+    // в статусе были бы новая карта и «ok» старого AMCL (агент VDA принял бы это за локализацию).
+    localization_ = robot_interfaces::msg::Localization{};
+    localization_.status = "none";
+    update_switching();
     pending_pose_.reset();
     emit_event("info", "MAP_ACTIVATED", "Active map: " + e->name, {{"map_id", e->id}, {"name", e->name}});
   }
