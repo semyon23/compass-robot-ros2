@@ -1,5 +1,7 @@
 """TurtleBot4 в Gazebo (склад depot): сервер Gazebo, робот, мост ROS ↔ Gazebo, robot_state_publisher.
 
+Мир — своя копия depot.sdf (worlds/) с шагом физики 5 мс вместо 3 мс: меньше нагрузка на весь стек.
+
 Копия nav2_minimal_tb4_sim/simulation.launch.py без одной гонки: там xacro пишет мир в /tmp
 параллельно со стартом gz sim, и на нагруженной машине Gazebo падает с «Unable to find or download
 file». Здесь gz sim стартует, когда xacro закончил. RViz — только с окном (headless:=False).
@@ -26,8 +28,8 @@ def generate_launch_description():
     robot_sdf = os.path.join(desc_dir, 'urdf', 'standard', 'turtlebot4.urdf.xacro')
 
     world_sdf = tempfile.mktemp(prefix='nav2_', suffix='.sdf')
-    world_xacro = ExecuteProcess(
-        cmd=['xacro', '-o', world_sdf, ['headless:=', headless], os.path.join(sim_dir, 'worlds', 'depot.sdf')])
+    world = os.path.join(get_package_share_directory('compass_sim'), 'worlds', 'depot.sdf')
+    world_xacro = ExecuteProcess(cmd=['xacro', '-o', world_sdf, ['headless:=', headless], world])
     gazebo_server = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(gz_launch), launch_arguments={'gz_args': ['-r -s ', world_sdf]}.items())
 

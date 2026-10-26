@@ -31,6 +31,6 @@ def generate_launch_description():
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(launch, 'web.launch.py')),
-            launch_arguments=args.items(),
+            launch_arguments={'robot_config': args['robot_config'], 'data_dir': args['data_dir']}.items(),
         ),
     ])

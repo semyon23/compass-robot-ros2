@@ -71,7 +71,8 @@ def generate_launch_description():
             executable='task_orchestrator_node',
             name='task_orchestrator',
             parameters=[{
-                'use_sim_time': use_sim_time,
+                # Без use_sim_time и в симуляции: таймауты задач — реальные секунды, история — по часам
+                # робота, а /clock (~330 Гц) нода на Python обрабатывала бы впустую.
                 # Собирает compass_core из config/tasks.yaml и порога батареи (Настройки → Робот).
                 'tasks_config_path': PathJoinSubstitution([data_dir, 'config', 'tasks.yaml']),
                 'storage.enabled': True,

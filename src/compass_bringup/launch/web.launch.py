@@ -13,11 +13,9 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     config = os.path.join(get_package_share_directory('compass_bringup'), 'config')
-    use_sim_time = LaunchConfiguration('use_sim_time')
 
     return LaunchDescription([
         DeclareLaunchArgument('robot_config', description='каталог конфигов робота (образец — compass_sim/config)'),
-        DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('data_dir', default_value='/var/lib/robot'),
 
         # Веб-сервер: UI, /files, прокси /rosbridge — снаружи робота открыт только он.
@@ -36,7 +34,9 @@ def generate_launch_description():
             package='rosbridge_server',
             executable='rosbridge_websocket',
             name='rosbridge_websocket',
-            parameters=[os.path.join(config, 'rosbridge.yaml'), {'use_sim_time': use_sim_time}],
+            # Без use_sim_time: rosbridge только пересылает сообщения, а /clock в симуляции идёт
+            # ~330 Гц — нода на Python тратила бы на него заметную долю процессора.
+            parameters=[os.path.join(config, 'rosbridge.yaml')],
             output='screen',
         ),
     ])

@@ -32,7 +32,8 @@ def generate_launch_description():
             launch_arguments={'headless': LaunchConfiguration('headless')}.items(),
         ),
         # В Gazebo TB4 нет BMS: заряд, который тратится в движении.
-        Node(package='compass_sim', executable='fake_battery.py', parameters=[{'use_sim_time': True}]),
+        # Без use_sim_time: таймер раз в секунду не нужен /clock (~330 Гц) — нода на Python тратила бы на него CPU.
+        Node(package='compass_sim', executable='fake_battery.py'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(bringup, 'compass.launch.py')),
             launch_arguments={
