@@ -1,5 +1,5 @@
 # /compass/nav/start — сервисная цель или маршрут (только SERVICE, только владелец аренды).
-# Прежняя цель Compass отменяется. Ответ — когда task_orchestrator начал задачу или отказал.
+# Прежняя цель Compass отменяется. Ответ — когда Nav2 принял цель или отказал.
 string lease_id
 string kind                      # goal | route
 string mode                      # waypoints | through_poses (для route)

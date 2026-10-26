@@ -1,4 +1,0 @@
-string agent_id
-bool include_stale
----
-AgentRecordV1[] agents

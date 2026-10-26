@@ -1,4 +1,4 @@
-"""Ядро Compass: compass_core, task_orchestrator, twist_mux.
+"""Ядро Compass: compass_core, twist_mux.
 
 SLAM и навигацию (Nav2) compass_core запускает сам — slam.launch.py и nav.launch.py с параметрами
 из каталога конфигов робота. Драйверы робота (база, лидар, ros2_control, robot_state_publisher)
@@ -42,7 +42,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('robot_config', description='каталог конфигов робота (образец — compass_sim/config)'),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        # Карты, настройки, журнал, история задач (ROS_INTERFACES.md §5).
+        # Карты, настройки, журнал, события (ROS_INTERFACES.md §5).
         DeclareLaunchArgument('data_dir', default_value='/var/lib/robot'),
         DeclareLaunchArgument('cmd_vel_topic', default_value='cmd_vel', description='куда база принимает скорость'),
 
@@ -55,7 +55,6 @@ def generate_launch_description():
                     'use_sim_time': use_sim_time,
                     'data_dir': data_dir,
                     'config_schema': os.path.join(config, 'robot_schema.yaml'),
-                    'tasks_template': os.path.join(config, 'tasks.yaml'),
                     # Параметры стеков, которые compass_core запускает сам.
                     'nav_params': PathJoinSubstitution([robot_config, 'nav2.yaml']),
                     'slam_params': PathJoinSubstitution([robot_config, 'slam_toolbox.yaml']),
@@ -65,19 +64,4 @@ def generate_launch_description():
         ),
         # Кто управляет скоростью: джойстик Compass приоритетнее Nav2 (config/twist_mux.yaml).
         OpaqueFunction(function=twist_mux, kwargs={'config': config}),
-        # Исполнитель задач: сервисные цели Compass (ROS_INTERFACES.md §4). История — в SQLite.
-        Node(
-            package='task_orchestrator_core',
-            executable='task_orchestrator_node',
-            name='task_orchestrator',
-            parameters=[{
-                # Без use_sim_time и в симуляции: таймауты задач — реальные секунды, история — по часам
-                # робота, а /clock (~330 Гц) нода на Python обрабатывала бы впустую.
-                # Собирает compass_core из config/tasks.yaml и порога батареи (Настройки → Робот).
-                'tasks_config_path': PathJoinSubstitution([data_dir, 'config', 'tasks.yaml']),
-                'storage.enabled': True,
-                'storage.sqlite_path': PathJoinSubstitution([data_dir, 'tasks.db']),
-            }],
-            output='screen',
-        ),
     ])

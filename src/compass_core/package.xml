@@ -23,7 +23,6 @@
   <depend>tf2_ros</depend>
   <depend>slam_toolbox</depend>
   <depend>yaml_cpp_vendor</depend>
-  <depend>task_orchestrator_msgs</depend>
   <depend>nlohmann-json-dev</depend>
   <depend>robot_interfaces</depend>
 

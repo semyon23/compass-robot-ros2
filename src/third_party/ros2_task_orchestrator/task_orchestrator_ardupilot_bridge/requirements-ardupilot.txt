@@ -1,2 +1,0 @@
-# Reproducible MAVLink runtime used by CI and SITL validation.
-pymavlink==2.4.49

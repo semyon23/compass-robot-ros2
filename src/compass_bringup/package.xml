@@ -17,7 +17,6 @@
   <exec_depend>compass_web</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
-  <exec_depend>task_orchestrator_core</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
 
   <export>

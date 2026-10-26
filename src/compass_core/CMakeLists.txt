@@ -20,7 +20,6 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(slam_toolbox REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
-find_package(task_orchestrator_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(robot_interfaces REQUIRED)
 
@@ -38,7 +37,7 @@ add_executable(compass_core
 )
 target_include_directories(compass_core PRIVATE include)
 ament_target_dependencies(compass_core
-  rclcpp rclcpp_action std_msgs std_srvs geometry_msgs nav_msgs nav2_msgs rcl_interfaces sensor_msgs diagnostic_msgs tf2 tf2_ros slam_toolbox task_orchestrator_msgs robot_interfaces
+  rclcpp rclcpp_action std_msgs std_srvs geometry_msgs nav_msgs nav2_msgs rcl_interfaces sensor_msgs diagnostic_msgs tf2 tf2_ros slam_toolbox robot_interfaces
 )
 target_link_libraries(compass_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
 

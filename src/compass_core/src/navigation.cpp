@@ -1,29 +1,31 @@
 #include "compass_core/compass_core.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <random>
-
-#include <nlohmann/json.hpp>
+#include <type_traits>
 
 using namespace std::chrono_literals;
-using json = nlohmann::json;
 
 namespace compass_core {
 
 namespace {
 
-// Новая цель при активной ждёт в очереди оркестратора, пока прежняя отменяется. Очередь ждёт и
-// допуска (заряд, режим) — поэтому их compass_core проверяет сам заранее, а цель, которая так и
-// не началась за kNavStartReply, отменяет: иначе она могла бы поехать сама намного позже.
-// deadline_at оркестратора не подходит — он ограничивает и время самой езды.
-constexpr auto kNavStartReply = 6s;
+// NavStart отвечает, когда Nav2 принял цель. Если перед ней отменяется прежняя или Nav2 не отвечает —
+// ждём не дольше этого, иначе UI повис бы на «Ставим цель».
+constexpr auto kNavStartReply = 5s;
+
+// Новую цель после отменённой прежней отправляем не сразу: follow_waypoints отвечает «отменено»
+// раньше, чем bt_navigator закончил свою navigate_to_pose, и цель, пришедшая в эти миллисекунды,
+// прерывается. check_nav отправит её через kNextGoalDelay..kNextGoalDelay + 500 мс.
+constexpr auto kNextGoalDelay = 300ms;
 
 // Пороги локализации по σ положения и курса из ковариации AMCL.
 constexpr double kOkSigma = 0.6;    // м и рад: робот знает, где он
 constexpr double kLostSigma = 2.0;  // м: потерялся
 
-std::string make_task_id()
+std::string make_goal_id()
 {
   static std::mt19937_64 rng{std::random_device{}()};
   char buf[33];
@@ -32,17 +34,29 @@ std::string make_task_id()
   return buf;
 }
 
-// Pose2D → geometry_msgs/PoseStamped в JSON (как ждёт set_message_fields оркестратора).
 // stamp нулевой — Nav2 возьмёт последний TF.
-json pose_stamped(const robot_interfaces::msg::Pose2D & p)
+geometry_msgs::msg::PoseStamped pose_stamped(const std::string & frame, const robot_interfaces::msg::Pose2D & p)
 {
-  return {
-    {"header", {{"frame_id", "map"}}},
-    {"pose", {
-      {"position", {{"x", p.x}, {"y", p.y}, {"z", 0.0}}},
-      {"orientation", {{"x", 0.0}, {"y", 0.0}, {"z", std::sin(p.theta / 2)}, {"w", std::cos(p.theta / 2)}}},
-    }},
-  };
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header.frame_id = frame;
+  msg.pose.position.x = p.x;
+  msg.pose.position.y = p.y;
+  msg.pose.orientation.z = std::sin(p.theta / 2);
+  msg.pose.orientation.w = std::cos(p.theta / 2);
+  return msg;
+}
+
+// Код ошибки Nav2 → NavStatus.error_code. Сотни — какой сервер не справился (nav2_msgs/action):
+// 2xx, 3xx — планировщик (нет пути, цель в препятствии или вне карты), 1xx — контроллер
+// (нет прогресса, нет допустимой скорости), 7xx — восстановления (spin, backup).
+// bt_navigator передаёт их, если они перечислены в error_code_names (nav2.yaml).
+std::string nav_error(uint16_t code)
+{
+  switch (code / 100) {
+    case 2: case 3: return "NO_PATH";
+    case 1: case 7: return "STUCK";
+    default: return "NAV_FAILED";
+  }
 }
 
 }  // namespace
@@ -86,10 +100,11 @@ void CompassCore::publish_initial_pose(const robot_interfaces::msg::Pose2D & pos
 
 // ---------- Сервисные цели ----------
 //
-// Цель Compass — задача task_orchestrator (ROS_INTERFACES.md §4.4): action execute_task.
-// Оркестратор принимает любой goal; отказ (допуск, конфликт, Nav2 не поднят) приходит
-// результатом со status REJECTED. Поэтому NavStart отвечает по первому feedback (задача началась)
-// или по результату (отказ или мгновенное завершение); не началась за kNavStartReply — отмена.
+// Цель Compass — прямо в Nav2 (ROS_INTERFACES.md §4): goal → navigate_to_pose, маршрут →
+// follow_waypoints или navigate_through_poses. NavStart отвечает, когда Nav2 принял цель.
+// Новая цель при активной: прежнюю отменяем и отправляем новую, когда Nav2 её завершил —
+// navigate_to_pose и navigate_through_poses делят один bt_navigator, и пока работает одна,
+// другую он отклоняет.
 
 void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
 {
@@ -116,7 +131,6 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
     fail(res, "MODE_NOT_ALLOWED", "робот не локализован: задайте позу на карте");
     return reply();
   }
-  // Допуск по заряду проверит и оркестратор, но с очередью — ждал бы; отвечаем сразу.
   if (battery_.present && battery_.percent < setting("battery.min_task_percent")) {
     fail(res, "MODE_NOT_ALLOWED", "заряд " + std::to_string(static_cast<int>(battery_.percent)) +
                                     "% ниже минимума для задач " +
@@ -137,69 +151,155 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
     fail(res, "BUSY", "предыдущая цель ещё ставится");
     return reply();
   }
-  if (!task_client_->action_server_is_ready()) {
-    fail(res, "INTERNAL", "task_orchestrator не запущен");
-    return reply();
+
+  nav_start_id_ = id;
+  nav_start_deadline_ = ChildProcess::Clock::now() + kNavStartReply;
+  if (nav_.state == "active") {
+    cancel_goal();
+    nav_next_ = req;  // отправит check_nav, когда Nav2 завершит прежнюю
+    return;
   }
+  send_goal(*req);
+}
 
-  // Оркестратор цель не заменяет: прежнюю отменяем сами, новая ждёт в очереди (queue_on_conflict),
-  // пока прежняя не освободит группу navigation.
-  const bool replacing = nav_.state == "active";
-  cancel_goal();
-
-  json data;
-  std::string task_name;
-  if (goal) {
-    task_name = "nav2/navigate_to_pose";
-    data["pose"] = pose_stamped(req->poses[0]);
-  } else {
-    task_name = req->mode == "waypoints" ? "nav2/follow_waypoints" : "nav2/navigate_through_poses";
-    data["poses"] = json::array();
-    for (const auto & p : req->poses) {
-      data["poses"].push_back(pose_stamped(p));
-    }
+void CompassCore::send_goal(const NavStart::Request & req)
+{
+  const bool goal = req.kind == "goal";
+  const bool waypoints = req.mode == "waypoints";
+  const bool ready = goal ? to_pose_client_->action_server_is_ready()
+                     : waypoints ? waypoints_client_->action_server_is_ready()
+                     : through_poses_client_->action_server_is_ready();
+  if (!ready) {
+    return reply_nav_start(false, "INTERNAL", "Nav2 не отвечает");
   }
-
-  ExecuteTask::Goal g;
-  g.task_id = make_task_id();
-  g.task_name = task_name;
-  g.source = "compass";
-  g.operator_id = lease_.holder_name();
-  g.metadata_json = json{{"client_id", lease_.holder_id()}}.dump();
-  g.task_data_json = data.dump();
-  g.queue_on_conflict = replacing;
 
   prev_nav_ = nav_;
   nav_ = robot_interfaces::msg::NavStatus{};
-  nav_.goal_id = g.task_id;
+  nav_.goal_id = make_goal_id();
   nav_.source = "compass";
   nav_.operator_name = lease_.holder_name();
-  nav_.kind = req->kind;
-  nav_.mode = goal ? "" : req->mode;
-  nav_.poses = req->poses;
+  nav_.kind = req.kind;
+  nav_.mode = goal ? "" : req.mode;
+  nav_.poses = req.poses;
   nav_.state = "active";
   nav_.distance_remaining = -1.0f;
   nav_.eta = -1.0f;
-  nav_start_id_ = id;
-  nav_start_deadline_ = ChildProcess::Clock::now() + kNavStartReply;
 
-  rclcpp_action::Client<ExecuteTask>::SendGoalOptions options;
-  options.goal_response_callback = [this, task_id = g.task_id](auto handle) {
-    if (!handle && nav_.goal_id == task_id) {
+  if (goal) {
+    NavigateToPose::Goal g;
+    g.pose = pose_stamped(map_frame_, req.poses[0]);
+    send_nav<NavigateToPose>(to_pose_client_, g);
+  } else if (waypoints) {
+    FollowWaypoints::Goal g;
+    for (const auto & p : req.poses) {
+      g.poses.push_back(pose_stamped(map_frame_, p));
+    }
+    send_nav<FollowWaypoints>(waypoints_client_, g);
+  } else {
+    NavigateThroughPoses::Goal g;
+    for (const auto & p : req.poses) {
+      g.poses.push_back(pose_stamped(map_frame_, p));
+    }
+    send_nav<NavigateThroughPoses>(through_poses_client_, g);
+  }
+  RCLCPP_INFO(get_logger(), "Цель %s: %s %s, точек %zu", nav_.goal_id.c_str(), nav_.kind.c_str(),
+              nav_.mode.c_str(), nav_.poses.size());
+}
+
+// Ответы Nav2 сверяем с goal_id: результат прежней или брошенной цели не должен трогать текущую.
+template <typename Action>
+void CompassCore::send_nav(const std::shared_ptr<rclcpp_action::Client<Action>> & client,
+                           const typename Action::Goal & goal)
+{
+  using Handle = rclcpp_action::ClientGoalHandle<Action>;
+  typename rclcpp_action::Client<Action>::SendGoalOptions o;
+  const std::string id = nav_.goal_id;
+
+  o.goal_response_callback = [this, client, id](typename Handle::SharedPtr h) {
+    if (id != nav_.goal_id) {
+      if (h) {
+        client->async_cancel_goal(h);  // NavStart уже ответил отказом по таймауту — цель не нужна
+      }
+      return;
+    }
+    if (!h) {
       nav_ = prev_nav_;
-      reply_nav_start(false, "INTERNAL", "task_orchestrator не принял задачу");
+      return reply_nav_start(false, "INTERNAL", "Nav2 не принял цель");
+    }
+    nav_cancel_ = [client, h] { client->async_cancel_goal(h); };
+    reply_nav_start(true, "", "");
+    if (nav_cancel_wanted_) {
+      nav_cancel_();  // отмену попросили, пока Nav2 принимал цель
     }
   };
-  options.feedback_callback = [this](auto, const std::shared_ptr<const ExecuteTask::Feedback> fb) {
-    on_task_feedback(*fb);
-  };
-  options.result_callback = [this, task_id = g.task_id](const auto & wrapped) {
-    if (wrapped.result) {
-      on_task_result(task_id, *wrapped.result);
+
+  o.feedback_callback = [this, id](typename Handle::SharedPtr, const std::shared_ptr<const typename Action::Feedback> fb) {
+    if (id != nav_.goal_id || nav_.state != "active") {
+      return;
     }
+    if constexpr (std::is_same_v<Action, FollowWaypoints>) {
+      nav_.index = fb->current_waypoint;  // расстояния follow_waypoints не сообщает
+    } else {
+      nav_.distance_remaining = fb->distance_remaining;
+      nav_.eta = static_cast<float>(rclcpp::Duration(fb->estimated_time_remaining).seconds());
+      nav_.recoveries = static_cast<uint16_t>(fb->number_of_recoveries);
+    }
+    if constexpr (std::is_same_v<Action, NavigateThroughPoses>) {
+      const auto total = nav_.poses.size();
+      const auto remaining = std::min<std::size_t>(std::max<int>(fb->number_of_poses_remaining, 0), total);
+      nav_.index = static_cast<uint32_t>(total - remaining);
+    }
+    nav_dirty_ = true;
   };
-  task_client_->async_send_goal(g, options);
-  RCLCPP_INFO(get_logger(), "Цель %s: %s, точек %zu", g.task_id.c_str(), task_name.c_str(), req->poses.size());
+
+  o.result_callback = [this, id](const typename Handle::WrappedResult & w) {
+    if (id != nav_.goal_id || nav_.state != "active") {
+      return;
+    }
+    const uint16_t error = w.result ? w.result->error_code : 0;
+    const std::string message = w.result ? w.result->error_msg : "";
+    std::string missed;  // follow_waypoints завершается успешно, даже если часть точек пропущена
+    if constexpr (std::is_same_v<Action, FollowWaypoints>) {
+      if (w.result) {
+        for (const auto & m : w.result->missed_waypoints) {
+          missed += (missed.empty() ? "" : ", ") + std::to_string(m.index + 1);
+        }
+      }
+    }
+    finish_goal(w.code, error, message, missed);
+  };
+
+  client->async_send_goal(goal, o);
+}
+
+void CompassCore::finish_goal(rclcpp_action::ResultCode code, uint16_t error, const std::string & message,
+                              const std::string & missed)
+{
+  nav_cancel_ = nullptr;
+  nav_cancel_wanted_ = false;
+  if (code == rclcpp_action::ResultCode::SUCCEEDED) {
+    nav_.state = "succeeded";
+    nav_.index = static_cast<uint32_t>(nav_.poses.size());
+    nav_.distance_remaining = 0.0f;
+    if (!missed.empty()) {
+      emit_event("warning", "NAV_WAYPOINTS_MISSED", "Waypoints missed: " + missed, {{"points", missed}});
+    } else {
+      emit_event("info", "NAV_GOAL_SUCCEEDED", "Goal reached");
+    }
+  } else if (code == rclcpp_action::ResultCode::CANCELED) {
+    nav_.state = "canceled";
+    emit_event("info", "NAV_GOAL_CANCELED", "Goal canceled");
+  } else {
+    nav_.state = "failed";
+    nav_.error_code = nav_error(error);
+    // Текст Nav2 в Jazzy обычно пустой — тогда хотя бы код.
+    nav_.error_message = message.empty() ? "Nav2 error " + std::to_string(error) : message;
+    emit_event("warning", "NAV_GOAL_FAILED", "Goal failed: " + nav_.error_code + ", " + nav_.error_message,
+               {{"code", nav_.error_code}, {"nav2_code", std::to_string(error)}});
+  }
+  RCLCPP_INFO(get_logger(), "Цель %s: %s %u %s", nav_.goal_id.c_str(), nav_.state.c_str(), error, message.c_str());
+  publish_nav_status();
+  nav_next_at_ = ChildProcess::Clock::now() + kNextGoalDelay;
 }
 
 void CompassCore::on_nav_cancel(Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res)
@@ -208,101 +308,21 @@ void CompassCore::on_nav_cancel(Trigger::Request::SharedPtr, Trigger::Response::
   res->success = true;
 }
 
+// Итог отмены (canceled) приходит результатом Nav2 — finish_goal.
 void CompassCore::cancel_goal()
 {
-  if (nav_.state != "active" || !cancel_tasks_client_->service_is_ready()) {
+  if (nav_next_) {  // новая цель ждала, пока отменится прежняя, — отменяется и она
+    nav_next_.reset();
+    reply_nav_start(false, "BUSY", "цель отменена до начала");
+  }
+  if (nav_.state != "active") {
     return;
   }
-  auto req = std::make_shared<CancelTasks::Request>();
-  req->task_ids = {nav_.goal_id};
-  req->source = "compass";
-  cancel_tasks_client_->async_send_request(req);
-}
-
-void CompassCore::stop_tasks()
-{
-  if (!stop_tasks_client_->service_is_ready()) {
-    return;
-  }
-  auto req = std::make_shared<StopTasks::Request>();
-  req->source = "compass";
-  stop_tasks_client_->async_send_request(req);
-}
-
-// Feedback Nav2 лежит в feedback_json.backend (поля — §4.4 контракта).
-void CompassCore::on_task_feedback(const ExecuteTask::Feedback & fb)
-{
-  if (fb.task_id != nav_.goal_id || nav_.state != "active") {
-    return;
-  }
-  reply_nav_start(true, "", "");  // задача началась
-  const json j = json::parse(fb.feedback_json, nullptr, false);
-  if (j.is_discarded() || !j.contains("backend")) {
-    return;
-  }
-  const json & b = j["backend"];
-  if (b.contains("distance_remaining")) {
-    nav_.distance_remaining = b["distance_remaining"].get<float>();
-  }
-  if (b.contains("estimated_time_remaining")) {
-    const json & t = b["estimated_time_remaining"];
-    nav_.eta = t.value("sec", 0) + t.value("nanosec", 0) * 1e-9f;
-  }
-  if (b.contains("number_of_recoveries")) {
-    nav_.recoveries = b["number_of_recoveries"].get<uint16_t>();
-  }
-  if (b.contains("current_waypoint")) {  // follow_waypoints
-    nav_.index = b["current_waypoint"].get<uint32_t>();
-  }
-  if (b.contains("number_of_poses_remaining")) {  // navigate_through_poses
-    const auto remaining = b["number_of_poses_remaining"].get<uint32_t>();
-    nav_.index = static_cast<uint32_t>(nav_.poses.size()) - std::min<uint32_t>(remaining, nav_.poses.size());
-  }
-  nav_dirty_ = true;
-}
-
-void CompassCore::on_task_result(const std::string & task_id, const ExecuteTask::Result & r)
-{
-  if (task_id != nav_.goal_id) {
-    return;  // результат прежней, уже заменённой цели
-  }
-  if (r.status == "REJECTED" && nav_start_id_) {
-    // Отказ при постановке: допуск (режим, локализация), конфликт, Nav2 не поднят — ответ NavStart.
-    const bool policy = r.error_code == "POLICY_REJECTED" || r.error_code == "RESOURCE_CONFLICT" ||
-                        r.error_code == "SERVER_UNAVAILABLE";
-    nav_ = prev_nav_;
-    return reply_nav_start(false, policy ? "MODE_NOT_ALLOWED" : "INTERNAL", r.error_message);
-  }
-  reply_nav_start(true, "", "");
-
-  if (r.status == "DONE") {
-    nav_.state = "succeeded";
-    nav_.index = static_cast<uint32_t>(nav_.poses.size());
-    nav_.distance_remaining = 0.0f;
-    // follow_waypoints завершается успешно, даже если часть точек пропущена.
-    const json j = json::parse(r.result_json, nullptr, false);
-    if (!j.is_discarded() && j.contains("missed_waypoints") && !j["missed_waypoints"].empty()) {
-      std::string missed;
-      for (const auto & w : j["missed_waypoints"]) {
-        missed += (missed.empty() ? "" : ", ") + std::to_string(w.value("index", 0u) + 1);
-      }
-      emit_event("warning", "NAV_WAYPOINTS_MISSED", "Waypoints missed: " + missed, {{"points", missed}});
-    } else {
-      emit_event("info", "NAV_GOAL_SUCCEEDED", "Goal reached");
-    }
-  } else if (r.status == "CANCELED") {
-    nav_.state = "canceled";
-    emit_event("info", "NAV_GOAL_CANCELED", "Goal canceled");
+  if (nav_cancel_) {
+    nav_cancel_();
   } else {
-    // При неудаче Nav2 оркестратор 1.0.0 не передаёт его код ошибки — различаем только таймаут.
-    nav_.state = "failed";
-    const bool timeout = r.error_code == "TASK_TIMEOUT" || r.error_code == "DEADLINE_EXCEEDED";
-    nav_.error_code = timeout ? "TIMEOUT" : "NAV_FAILED";
-    nav_.error_message = r.error_message;
-    emit_event("warning", "NAV_GOAL_FAILED", "Goal failed: " + r.error_message, {{"code", nav_.error_code}});
+    nav_cancel_wanted_ = true;
   }
-  RCLCPP_INFO(get_logger(), "Цель %s: %s %s", task_id.c_str(), nav_.state.c_str(), r.error_message.c_str());
-  publish_nav_status();
 }
 
 void CompassCore::reply_nav_start(bool success, const std::string & code, const std::string & message)
@@ -325,9 +345,25 @@ void CompassCore::reply_nav_start(bool success, const std::string & code, const 
 // Раз в 500 мс: прогресс активной цели (feedback Nav2 идёт чаще — UI столько не нужно).
 void CompassCore::check_nav()
 {
-  if (nav_start_id_ && ChildProcess::Clock::now() > nav_start_deadline_) {
-    cancel_goal();  // так и не началась — из очереди её убираем
-    reply_nav_start(false, "BUSY", "цель не началась: прежняя не отменилась вовремя");
+  const auto now = ChildProcess::Clock::now();
+  if (nav_next_ && nav_.state != "active" && now >= nav_next_at_) {
+    const auto req = nav_next_;
+    nav_next_.reset();
+    send_goal(*req);
+  }
+  if (nav_start_id_ && now > nav_start_deadline_) {
+    if (nav_next_) {
+      nav_next_.reset();
+      reply_nav_start(false, "BUSY", "цель не началась: прежняя не отменилась вовремя");
+    } else {
+      nav_ = prev_nav_;  // ответ Nav2, если придёт позже, отменит цель (goal_id уже другой)
+      nav_cancel_wanted_ = false;
+      reply_nav_start(false, "INTERNAL", "Nav2 не ответил на цель");
+    }
+  }
+  // Nav2 остановлен (смена карты, падение стека) — его результата уже не будет.
+  if (nav_.state == "active" && !navigation_up_ && !nav_start_id_) {
+    finish_goal(rclcpp_action::ResultCode::CANCELED, 0, "", "");
   }
   if (nav_dirty_ && nav_.state == "active") {
     publish_nav_status();
@@ -338,31 +374,6 @@ void CompassCore::publish_nav_status()
 {
   nav_status_pub_->publish(nav_);
   nav_dirty_ = false;
-}
-
-// Допуск задач (§4.3): оркестратор сам решает, можно ли начать задачу, по этим параметрам.
-// Шлём при изменении и раз в 5 с — на случай, если оркестратор перезапускался.
-void CompassCore::update_admission()
-{
-  if (!orchestrator_params_->service_is_ready()) {
-    return;
-  }
-  const std::string robot_mode = state_ == "switching" ? "SWITCHING" : mode_;
-  const double battery = battery_.present ? battery_.percent : 100.0;
-  const std::string key = robot_mode + "|" + (localized() ? "1" : "0") + "|" + std::to_string(battery) + "|" +
-                          (stopped_ ? "1" : "0");
-  const auto now = ChildProcess::Clock::now();
-  if (key == admission_sent_ && now - admission_at_ < 5s) {
-    return;
-  }
-  admission_sent_ = key;
-  admission_at_ = now;
-  orchestrator_params_->set_parameters({
-    rclcpp::Parameter("admission.robot_mode", robot_mode),
-    rclcpp::Parameter("admission.localization_ok", localized()),
-    rclcpp::Parameter("admission.emergency_stop_active", stopped_),
-    rclcpp::Parameter("admission.battery_percent", battery),
-  });
 }
 
 }  // namespace compass_core

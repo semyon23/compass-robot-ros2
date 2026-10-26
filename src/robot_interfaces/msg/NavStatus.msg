@@ -1,5 +1,5 @@
 # /compass/nav_status — сервисная цель Compass (reliable, transient_local, 1).
-string goal_id                   # task_id в task_orchestrator; пусто — задачи не было
+string goal_id                   # id цели, выдаёт compass_core; пусто — цели не было
 string source                    # compass
 string operator_name             # client_name владельца аренды, поставившего цель
 string kind                      # goal | route
@@ -10,5 +10,5 @@ string state                     # active | succeeded | failed | canceled
 float32 distance_remaining       # м до конца; -1 — неизвестно (UI не показывает)
 float32 eta                      # с; -1 — неизвестно
 uint16 recoveries
-string error_code                # NO_PATH | STUCK | TIMEOUT | INTERNAL; пусто без ошибки
+string error_code                # NO_PATH | STUCK | NAV_FAILED (по коду ошибки Nav2); пусто без ошибки
 string error_message

@@ -5,8 +5,7 @@
 # compass_ws — бортовое ПО робота
 
 ROS 2 workspace со всем, что работает на ПК робота: сервисная часть для **Compass** (веб-консоль
-обслуживания), агент **VDA 5050** для работы с fms, общие интерфейсы и сторонние пакеты в
-зафиксированных версиях. Workspace переносится на робот целиком и собирается там одной командой.
+обслуживания), агент **VDA 5050** для работы с fms и общие интерфейсы. Workspace переносится на робот целиком и собирается там одной командой.
 
 **Стек:** Ubuntu 24.04 · ROS 2 Jazzy · Nav2 · slam_toolbox · C++.
 
@@ -23,8 +22,8 @@ ROS 2 workspace со всем, что работает на ПК робота: �
 │     джойстик, СТОП                ◄──/robot/maps/activate───                 │
 │           │                                     │          │                 │
 │           ▼                                     ▼          ▼                 │
-│     ros2_task_orchestrator ──► докинг, лифт,   Nav2: FollowPath по рёбрам    │
-│     (сервисные цели, функции)  зарядка, цели                                 │
+│     Nav2: сервисные цели (SERVICE)             Nav2: FollowPath по рёбрам    │
+│     navigate_to_pose, …                                                      │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -48,16 +47,11 @@ ROS 2 workspace со всем, что работает на ПК робота: �
 | Пакет | Что | Состояние |
 |---|---|---|
 | `robot_interfaces` | общие msg/srv: режим, статус, аренда управления, джойстик, поза, скан, карты, навигация, журнал, настройки | ✅ этап 4 |
-| `compass_core` | сервисная часть: режим работы, статус, аренда управления, джойстик, поза, скан, картографирование, библиотека карт, активная карта и локализация, сервисные цели через task_orchestrator; журнал WARN+, настройки робота (`robot.yaml`); SLAM и Nav2 — дочерними процессами | ✅ этап 4 |
+| `compass_core` | сервисная часть: режим работы, статус, аренда управления, джойстик, поза, скан, картографирование, библиотека карт, активная карта и локализация, сервисные цели прямо в Nav2; журнал WARN+, настройки робота (`robot.yaml`); SLAM и Nav2 — дочерними процессами | ✅ этап 4 |
 | `compass_web` | веб-сервер Compass вместо nginx: статика UI, `/files`, прокси `/rosbridge` (Tornado из зависимостей rosbridge) | ✅ |
-| `compass_bringup` | общее для любого робота. launch: `compass.launch.py` = `core.launch.py` (compass_core, task_orchestrator, twist_mux) + `web.launch.py` (rosbridge, compass_web); `slam.launch.py` и `nav.launch.py` запускает compass_core. Конфиги Compass: rosbridge, twist_mux, задачи, схема настроек | ✅ |
+| `compass_bringup` | общее для любого робота. launch: `compass.launch.py` = `core.launch.py` (compass_core, twist_mux) + `web.launch.py` (rosbridge, compass_web); `slam.launch.py` и `nav.launch.py` запускает compass_core. Конфиги Compass: rosbridge, twist_mux, схема настроек | ✅ |
 | `compass_sim` | `sim.launch.py`: TurtleBot4 в Gazebo + `compass.launch.py`; `config/` — конфиги робота TurtleBot4, **образец для своего робота**. На робот не копируется | ✅ |
-| `vda5050_ros2` | агент VDA 5050 (ядро — из симулятора fms) | впереди |
-| `third_party/ros2_task_orchestrator` | 1.0.0 — исполнитель задач | ✅ собирается |
-
-Из `ros2_task_orchestrator` собираются только `task_orchestrator_msgs` и `task_orchestrator_core`.
-Остальные его пакеты (симуляторы, ArduPilot, примеры) роботу не нужны и отключены файлами
-`COLCON_IGNORE` — не удалены, чтобы пакет можно было обновить целиком.
+| `vda5050_ros2` | агент VDA 5050 v3: MQTT, order'а, движение по рёбрам (`FollowPath`), action'ы, карты | ✅ R1–R4 |
 
 ## Сборка
 
@@ -147,7 +141,7 @@ Compass запускает SLAM и навигацию сам, а **драйве�
 ### Каталог данных и логи
 
 Всё, что робот накапливает, лежит в `/var/lib/robot` (аргумент `data_dir` в `compass.launch.py`):
-карты и загрузки, история задач `tasks.db`, журнал compass_core `logs/` (WARN и выше со всех нод,
+карты и загрузки, лента событий `events.jsonl`, журнал compass_core `logs/` (WARN и выше со всех нод,
 файл на день, 7 дней — чистит сам) и логи ROS `ros_log/`. Ниже `robot` — пользователь, от
 которого запускается сервисная часть.
 

@@ -1,9 +1,5 @@
 #include "compass_core/compass_core.hpp"
 
-#include <fstream>
-
-#include <yaml-cpp/yaml.h>
-
 using json = nlohmann::json;
 
 namespace compass_core {
@@ -88,10 +84,6 @@ void CompassCore::apply_config(const json & changed)
       push_nav_limits();
     }
   }
-  if (has("battery.min_task_percent")) {
-    write_tasks_config();
-    tasks_reloaded_ = false;  // reload_tasks() попросит оркестратор перечитать
-  }
   if (has("battery.")) {
     battery_low_ = battery_critical_ = false;  // пороги сменились — проверим заново
     check_battery();
@@ -111,39 +103,6 @@ void CompassCore::push_nav_limits()
     rclcpp::Parameter("max_velocity", std::vector<double>{lin, lat, ang}),
     rclcpp::Parameter("min_velocity", std::vector<double>{-lin, -lat, -ang}),
   });
-}
-
-// Порог «минимум для задач» действует и на задания fms, поэтому он в допуске оркестратора:
-// admission.min_battery_percent у каждой задачи tasks.yaml.
-void CompassCore::write_tasks_config()
-{
-  if (tasks_template_.empty()) {
-    return;
-  }
-  YAML::Node tasks = YAML::LoadFile(tasks_template_);
-  for (auto task : tasks["tasks"]) {
-    task["admission"]["min_battery_percent"] = static_cast<int>(setting("battery.min_task_percent"));
-  }
-  const std::string tmp = tasks_config_ + ".tmp";
-  std::ofstream(tmp) << "# Собран compass_core из compass_bringup/config/tasks.yaml + настроек батареи. Не править.\n"
-                     << YAML::Dump(tasks) << "\n";
-  std::filesystem::rename(tmp, tasks_config_);
-}
-
-// Оркестратор мог стартовать раньше, чем compass_core собрал tasks.yaml: тогда он работает без
-// задач. Поэтому просим перечитать, как только сервис доступен, и после каждой смены порога.
-void CompassCore::reload_tasks()
-{
-  if (tasks_reloaded_ || !reload_tasks_client_->service_is_ready()) {
-    return;
-  }
-  tasks_reloaded_ = true;
-  reload_tasks_client_->async_send_request(
-    std::make_shared<ReloadTasks::Request>(), [this](rclcpp::Client<ReloadTasks>::SharedFuture f) {
-      if (!f.get()->success) {
-        RCLCPP_WARN(get_logger(), "task_orchestrator не перечитал tasks.yaml: %s", f.get()->error_message.c_str());
-      }
-    });
 }
 
 // Пороги батареи; гистерезис 2 % — чтобы событие не повторялось, пока заряд колеблется у порога.

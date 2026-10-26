@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <functional>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -9,6 +10,9 @@
 #include <vector>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <nav2_msgs/action/follow_waypoints.hpp>
+#include <nav2_msgs/action/navigate_through_poses.hpp>
+#include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <nav2_msgs/srv/manage_lifecycle_nodes.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
@@ -26,10 +30,6 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/set_bool.hpp>
 #include <std_srvs/srv/trigger.hpp>
-#include <task_orchestrator_msgs/action/execute_task_v1.hpp>
-#include <task_orchestrator_msgs/srv/cancel_tasks_v1.hpp>
-#include <task_orchestrator_msgs/srv/reload_config_v1.hpp>
-#include <task_orchestrator_msgs/srv/stop_tasks_v1.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
@@ -69,7 +69,7 @@ namespace compass_core {
 // Сервисная часть робота для Compass. Контракт — compass-ui/docs/ROS_INTERFACES.md.
 //   compass_core.cpp — режим работы, статус, аренда управления, джойстик, поза и скан;
 //   stacks.cpp       — стеки дочерними процессами (SLAM, навигация), картографирование, карты;
-//   navigation.cpp   — локализация, сервисные цели через task_orchestrator;
+//   navigation.cpp   — локализация, сервисные цели (action'ы Nav2);
 //   settings.cpp     — настройки робота (robot.yaml) и их применение, пороги батареи.
 class CompassCore : public rclcpp::Node {
 public:
@@ -94,10 +94,9 @@ private:
   using NavStart = robot_interfaces::srv::NavStart;
   using SerializePoseGraph = slam_toolbox::srv::SerializePoseGraph;
   using SlamPause = slam_toolbox::srv::Pause;
-  using ExecuteTask = task_orchestrator_msgs::action::ExecuteTaskV1;
-  using CancelTasks = task_orchestrator_msgs::srv::CancelTasksV1;
-  using StopTasks = task_orchestrator_msgs::srv::StopTasksV1;
-  using ReloadTasks = task_orchestrator_msgs::srv::ReloadConfigV1;
+  using NavigateToPose = nav2_msgs::action::NavigateToPose;
+  using FollowWaypoints = nav2_msgs::action::FollowWaypoints;
+  using NavigateThroughPoses = nav2_msgs::action::NavigateThroughPoses;
   using JsonCall = robot_interfaces::srv::JsonCall;
   using PoseCov = geometry_msgs::msg::PoseWithCovarianceStamped;
   using ManageNodes = nav2_msgs::srv::ManageLifecycleNodes;
@@ -173,25 +172,24 @@ private:
   void publish_initial_pose(const robot_interfaces::msg::Pose2D & pose);
   bool localized() const { return localization_.status == "ok"; }
 
-  // Сервисные цели (task_orchestrator)
+  // Сервисные цели (action'ы Nav2)
   void on_nav_start(RequestId id, NavStart::Request::SharedPtr req);
+  void send_goal(const NavStart::Request & req);
+  template <typename Action>
+  void send_nav(const std::shared_ptr<rclcpp_action::Client<Action>> & client, const typename Action::Goal & goal);
+  void finish_goal(rclcpp_action::ResultCode code, uint16_t error, const std::string & message,
+                   const std::string & missed);  // missed — пропущенные точки follow_waypoints, «2, 5»
   void on_nav_cancel(Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
   void cancel_goal();
-  void stop_tasks();
-  void on_task_feedback(const ExecuteTask::Feedback & fb);
-  void on_task_result(const std::string & task_id, const ExecuteTask::Result & r);
   void reply_nav_start(bool success, const std::string & code, const std::string & message);
-  void check_nav();  // раз в 500 мс: прогресс цели в /compass/nav_status, ответ NavStart по таймауту
+  void check_nav();  // раз в 500 мс: прогресс цели в /compass/nav_status, ждущая цель, таймаут NavStart
   void publish_nav_status();
-  void update_admission();
 
   // ---------- settings.cpp ----------
 
   void on_config(const std::string & op, JsonCall::Request::SharedPtr req, JsonCall::Response::SharedPtr res);
   void apply_config(const nlohmann::json & changed);  // ключи, которые изменились (при старте — все)
   void push_nav_limits();      // motion.* → velocity_smoother Nav2
-  void write_tasks_config();   // battery.min_task_percent → tasks.yaml оркестратора
-  void reload_tasks();         // оркестратор перечитывает tasks.yaml, когда он доступен
   void check_battery();        // пороги warn / critical
   double setting(const char * key) const { return config_->values()[key].get<double>(); }
 
@@ -202,7 +200,6 @@ private:
   bool cmd_vel_stamped_;  // база ждёт TwistStamped (ros2_control в Jazzy) — так же и twist_mux
   bool holonomic_;        // ездит боком: джойстик и лимит Nav2 по y
   bool use_sim_time_;
-  std::string tasks_template_, tasks_config_;  // tasks.yaml из compass_bringup → {data_dir}/config/tasks.yaml
   std::string nav_params_, slam_params_;       // nav2.yaml, slam_toolbox.yaml робота — для launch стеков
 
   // ---------- Состояние ----------
@@ -218,7 +215,6 @@ private:
   std::filesystem::path events_file_;
   bool stopped_ = false;  // СТОП из Compass: twist_mux заблокирован, задачи не принимаются
   std::unique_ptr<ConfigStore> config_;
-  bool tasks_reloaded_ = false;      // оркестратор перечитал tasks.yaml с текущим порогом батареи
   bool battery_low_ = false, battery_critical_ = false;
 
   // Стеки: одновременно работает один — SLAM или навигация.
@@ -255,11 +251,13 @@ private:
   robot_interfaces::msg::Localization localization_;
   robot_interfaces::msg::NavStatus nav_;          // текущая или последняя цель Compass
   robot_interfaces::msg::NavStatus prev_nav_;     // вернуть, если новую цель отклонили
-  RequestId nav_start_id_;                        // NavStart ждёт ответа оркестратора
+  RequestId nav_start_id_;                        // NavStart ждёт, пока Nav2 примет цель
   ChildProcess::Clock::time_point nav_start_deadline_{};
+  NavStart::Request::SharedPtr nav_next_;         // новая цель ждёт, пока Nav2 завершит прежнюю
+  ChildProcess::Clock::time_point nav_next_at_{}; // …и ещё kNextGoalDelay после этого
+  std::function<void()> nav_cancel_;              // отменить цель в Nav2; пусто — Nav2 её ещё не принял
+  bool nav_cancel_wanted_ = false;                // отмену попросили до того, как Nav2 принял цель
   bool nav_dirty_ = false;                        // nav_ изменился — опубликовать
-  std::string admission_sent_;                    // что последним отправили оркестратору
-  ChildProcess::Clock::time_point admission_at_{};
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -289,12 +287,10 @@ private:
   rclcpp::Client<SlamPause>::SharedPtr pause_client_;
   rclcpp::Client<Trigger>::SharedPtr localization_active_client_;
   rclcpp::Client<ManageNodes>::SharedPtr navigation_manage_client_;
-  rclcpp_action::Client<ExecuteTask>::SharedPtr task_client_;
-  rclcpp::Client<CancelTasks>::SharedPtr cancel_tasks_client_;
-  rclcpp::Client<StopTasks>::SharedPtr stop_tasks_client_;
-  std::shared_ptr<rclcpp::AsyncParametersClient> orchestrator_params_;
+  rclcpp_action::Client<NavigateToPose>::SharedPtr to_pose_client_;
+  rclcpp_action::Client<FollowWaypoints>::SharedPtr waypoints_client_;
+  rclcpp_action::Client<NavigateThroughPoses>::SharedPtr through_poses_client_;
   std::shared_ptr<rclcpp::AsyncParametersClient> smoother_params_;
-  rclcpp::Client<ReloadTasks>::SharedPtr reload_tasks_client_;
 
   rclcpp::Service<SetOperatingMode>::SharedPtr set_mode_srv_;
   rclcpp::Service<AcquireControl>::SharedPtr acquire_srv_;

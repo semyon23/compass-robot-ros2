@@ -76,8 +76,6 @@ CompassCore::CompassCore() : Node("compass_core")
     nlohmann::json{{"identity.name", robot_name_}, {"identity.serial_number", serial_number_},
                    {"identity.manufacturer", manufacturer_}, {"identity.model", model_},
                    {"motion.max_linear", max_linear_}, {"motion.max_angular", max_angular_}});
-  tasks_template_ = declare_parameter("tasks_template", "");
-  tasks_config_ = (config_dir / "tasks.yaml").string();
   apply_config(nlohmann::json(nullptr));  // null — все ключи
 
   // Активная карта переживает перезапуск; навигация с ней поднимется, когда робот выйдет из STARTUP.
@@ -148,12 +146,10 @@ CompassCore::CompassCore() : Node("compass_core")
   pause_client_ = create_client<SlamPause>("/slam_toolbox/pause_new_measurements");
   localization_active_client_ = create_client<Trigger>("/lifecycle_manager_localization/is_active");
   navigation_manage_client_ = create_client<ManageNodes>("/lifecycle_manager_navigation/manage_nodes");
-  task_client_ = rclcpp_action::create_client<ExecuteTask>(this, "/task_orchestrator/execute_task");
-  cancel_tasks_client_ = create_client<CancelTasks>("/task_orchestrator/cancel_tasks");
-  stop_tasks_client_ = create_client<StopTasks>("/task_orchestrator/stop");
-  orchestrator_params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, "task_orchestrator");
+  to_pose_client_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
+  waypoints_client_ = rclcpp_action::create_client<FollowWaypoints>(this, "/follow_waypoints");
+  through_poses_client_ = rclcpp_action::create_client<NavigateThroughPoses>(this, "/navigate_through_poses");
   smoother_params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, "velocity_smoother");
-  reload_tasks_client_ = create_client<ReloadTasks>("/task_orchestrator/reload_config");
 
   using namespace std::placeholders;
   set_mode_srv_ = create_service<SetOperatingMode>(
@@ -348,8 +344,6 @@ void CompassCore::publish_status()
   }
   status_pub_->publish(s);
   publish_stop_lock();  // и раз в секунду: twist_mux мог перезапуститься и не знать о СТОП
-  update_admission();
-  reload_tasks();
 }
 
 void CompassCore::emit_event(const std::string & level, const std::string & code,
@@ -545,12 +539,12 @@ void CompassCore::on_teleop(const robot_interfaces::msg::TeleopCommand & msg)
   }
 }
 
-// СТОП: twist_mux блокирует все входы скорости, задачи отменяются, новые не принимаются
-// (status.estop, допуск оркестратора), пока оператор не снимет СТОП в Compass.
+// СТОП: twist_mux блокирует все входы скорости, цель Compass отменяется, новые не принимаются
+// (status.estop), пока оператор не снимет СТОП в Compass.
 void CompassCore::on_stop(Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res)
 {
   publish_zero();
-  stop_tasks();  // все задачи с cancel_on_stop — в том числе цели Compass и агента
+  cancel_goal();  // задание fms агент останавливает сам — по status.estop
   if (!stopped_) {
     stopped_ = true;
     emit_event("warning", "STOP_PRESSED", "Stop pressed");
