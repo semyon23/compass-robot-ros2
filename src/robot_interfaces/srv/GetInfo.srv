@@ -7,5 +7,6 @@ string robot_name
 string serial_number
 string manufacturer
 string model
+float32 robot_radius             # м: радиус робота — для значка на карте Compass
 diagnostic_msgs/KeyValue[] versions
 string[] capabilities            # что умеет робот; UI прячет остальное

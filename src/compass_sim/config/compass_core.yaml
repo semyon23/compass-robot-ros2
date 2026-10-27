@@ -16,5 +16,6 @@ compass_core:
     # Тот же тип должен быть у Nav2: enable_stamped_cmd_vel в nav2.yaml.
     cmd_vel_stamped: false
     holonomic: false    # true — робот ездит боком (меканум, омни): джойстик вбок, лимит Nav2 по y
+    robot_radius: 0.22  # м — размер значка робота на карте Compass (как robot_radius в nav2.yaml)
     max_linear: 0.5     # м/с — предел для джойстика и Nav2
     max_angular: 1.0    # рад/с

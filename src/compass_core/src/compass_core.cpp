@@ -60,6 +60,7 @@ CompassCore::CompassCore() : Node("compass_core")
   max_angular_ = declare_parameter("max_angular", 1.0);
   cmd_vel_stamped_ = declare_parameter("cmd_vel_stamped", false);
   holonomic_ = declare_parameter("holonomic", false);
+  robot_radius_ = declare_parameter("robot_radius", 0.3);
   use_sim_time_ = get_parameter("use_sim_time").as_bool();  // передаём в launch стеков
   // Параметры стеков, которые compass_core запускает сам, — из каталога конфигов робота.
   nav_params_ = declare_parameter("nav_params", "");
@@ -167,7 +168,7 @@ CompassCore::CompassCore() : Node("compass_core")
     "/compass/stop/release", std::bind(&CompassCore::on_stop_release, this, _1, _2));
   events_srv_ = create_service<GetEvents>(
     "/compass/events/history", std::bind(&CompassCore::on_get_events, this, _1, _2));
-  // save, set_paused и nav/start отвечают позже — когда ответят slam_toolbox или оркестратор:
+  // save, set_paused и nav/start отвечают позже — когда ответят slam_toolbox или Nav2:
   // обработчик не ждёт, ответ уходит из колбэка клиента (send_response).
   save_srv_ = create_service<SaveMap>(
     "/compass/mapping/save", [this](RequestId id, SaveMap::Request::SharedPtr req) { on_save(id, req); });
@@ -435,6 +436,7 @@ void CompassCore::on_get_info(GetInfo::Request::SharedPtr, GetInfo::Response::Sh
   res->serial_number = serial_number_;
   res->manufacturer = manufacturer_;
   res->model = model_;
+  res->robot_radius = static_cast<float>(robot_radius_);
   const char * distro = std::getenv("ROS_DISTRO");
   for (const auto & [key, value] : Details{{"compass_core", "0.3.0"}, {"ros", distro ? distro : ""}}) {
     diagnostic_msgs::msg::KeyValue kv;

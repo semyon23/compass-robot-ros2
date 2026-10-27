@@ -199,6 +199,7 @@ private:
   double max_linear_, max_angular_;
   bool cmd_vel_stamped_;  // база ждёт TwistStamped (ros2_control в Jazzy) — так же и twist_mux
   bool holonomic_;        // ездит боком: джойстик и лимит Nav2 по y
+  double robot_radius_;   // м — для значка на карте Compass (get_info)
   bool use_sim_time_;
   std::string nav_params_, slam_params_;       // nav2.yaml, slam_toolbox.yaml робота — для launch стеков
 
