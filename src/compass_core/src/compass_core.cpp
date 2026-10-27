@@ -61,6 +61,8 @@ CompassCore::CompassCore() : Node("compass_core")
   cmd_vel_stamped_ = declare_parameter("cmd_vel_stamped", false);
   holonomic_ = declare_parameter("holonomic", false);
   robot_radius_ = declare_parameter("robot_radius", 0.3);
+  // Не меньше threshold_to_consider у GoalCritic / PathFollowCritic MPPI (nav2.yaml): 1.4 м по умолчанию.
+  route_loop_gap_ = declare_parameter("route_loop_gap", 1.5);
   use_sim_time_ = get_parameter("use_sim_time").as_bool();  // передаём в launch стеков
   // Параметры стеков, которые compass_core запускает сам, — из каталога конфигов робота.
   nav_params_ = declare_parameter("nav_params", "");
@@ -104,6 +106,7 @@ CompassCore::CompassCore() : Node("compass_core")
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel_teleop", rclcpp::QoS(1));
   }
   initial_pose_pub_ = create_publisher<PoseCov>("/initialpose", rclcpp::QoS(1).reliable());
+  plan_pub_ = create_publisher<nav_msgs::msg::Path>("/plan", 1);  // QoS — как у planner_server
   config_changed_pub_ = create_publisher<robot_interfaces::msg::ConfigChanged>("/compass/config/changed", latched);
   // Блокировка twist_mux (locks.stop в twist_mux.yaml): true — ни джойстик, ни Nav2 не едут.
   stop_lock_pub_ = create_publisher<std_msgs::msg::Bool>("compass_stop_lock", latched);
@@ -149,7 +152,7 @@ CompassCore::CompassCore() : Node("compass_core")
   navigation_manage_client_ = create_client<ManageNodes>("/lifecycle_manager_navigation/manage_nodes");
   to_pose_client_ = rclcpp_action::create_client<NavigateToPose>(this, "/navigate_to_pose");
   waypoints_client_ = rclcpp_action::create_client<FollowWaypoints>(this, "/follow_waypoints");
-  through_poses_client_ = rclcpp_action::create_client<NavigateThroughPoses>(this, "/navigate_through_poses");
+  follow_path_client_ = rclcpp_action::create_client<FollowPath>(this, "/follow_path");
   smoother_params_ = std::make_shared<rclcpp::AsyncParametersClient>(this, "velocity_smoother");
 
   using namespace std::placeholders;

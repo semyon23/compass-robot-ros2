@@ -17,5 +17,8 @@ compass_core:
     cmd_vel_stamped: false
     holonomic: false    # true — робот ездит боком (меканум, омни): джойстик вбок, лимит Nav2 по y
     robot_radius: 0.22  # м — размер значка робота на карте Compass (как robot_radius в nav2.yaml)
+    # Маршрут «по линии» режется на части там, где подходит к своему концу ближе этого (петли):
+    # не меньше threshold_to_consider у GoalCritic / PathFollowCritic MPPI в nav2.yaml (здесь 1.4).
+    route_loop_gap: 1.5
     max_linear: 0.5     # м/с — предел для джойстика и Nav2
     max_angular: 1.0    # рад/с

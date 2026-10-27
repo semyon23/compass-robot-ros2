@@ -2,7 +2,7 @@
 # Прежняя цель Compass отменяется. Ответ — когда Nav2 принял цель или отказал.
 string lease_id
 string kind                      # goal | route
-string mode                      # waypoints | through_poses (для route)
+string mode                      # waypoints | line (для route)
 Pose2D[] poses                   # 1..100, фрейм map
 ---
 bool success

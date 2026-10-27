@@ -10,8 +10,8 @@
 #include <vector>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <nav2_msgs/action/follow_path.hpp>
 #include <nav2_msgs/action/follow_waypoints.hpp>
-#include <nav2_msgs/action/navigate_through_poses.hpp>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <nav2_msgs/srv/manage_lifecycle_nodes.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -19,6 +19,7 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <rcl_interfaces/msg/log.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -66,6 +67,11 @@
 
 namespace compass_core {
 
+// Точка маршрута «по линии»: s — длина линии от позы робота на старте до неё.
+struct LinePoint {
+  double x, y, s;
+};
+
 // Сервисная часть робота для Compass. Контракт — compass-ui/docs/ROS_INTERFACES.md.
 //   compass_core.cpp — режим работы, статус, аренда управления, джойстик, поза и скан;
 //   stacks.cpp       — стеки дочерними процессами (SLAM, навигация), картографирование, карты;
@@ -96,7 +102,7 @@ private:
   using SlamPause = slam_toolbox::srv::Pause;
   using NavigateToPose = nav2_msgs::action::NavigateToPose;
   using FollowWaypoints = nav2_msgs::action::FollowWaypoints;
-  using NavigateThroughPoses = nav2_msgs::action::NavigateThroughPoses;
+  using FollowPath = nav2_msgs::action::FollowPath;
   using JsonCall = robot_interfaces::srv::JsonCall;
   using PoseCov = geometry_msgs::msg::PoseWithCovarianceStamped;
   using ManageNodes = nav2_msgs::srv::ManageLifecycleNodes;
@@ -179,6 +185,10 @@ private:
   void send_nav(const std::shared_ptr<rclcpp_action::Client<Action>> & client, const typename Action::Goal & goal);
   void finish_goal(rclcpp_action::ResultCode code, uint16_t error, const std::string & message,
                    const std::string & missed);  // missed — пропущенные точки follow_waypoints, «2, 5»
+  bool robot_in_map(double & x, double & y);
+  double line_progress(double x, double y) const;  // где робот на линии (s), рядом с прошлым line_s_
+  void send_line_part();  // маршрут «по линии»: текущая часть — от позы робота через непройденные точки
+  void on_line_result(rclcpp_action::ResultCode code, uint16_t error, const std::string & message);
   void on_nav_cancel(Trigger::Request::SharedPtr req, Trigger::Response::SharedPtr res);
   void cancel_goal();
   void reply_nav_start(bool success, const std::string & code, const std::string & message);
@@ -200,6 +210,7 @@ private:
   bool cmd_vel_stamped_;  // база ждёт TwistStamped (ros2_control в Jazzy) — так же и twist_mux
   bool holonomic_;        // ездит боком: джойстик и лимит Nav2 по y
   double robot_radius_;   // м — для значка на карте Compass (get_info)
+  double route_loop_gap_; // м — маршрут «по линии» режем на части там, где он подходит к своему концу ближе
   bool use_sim_time_;
   std::string nav_params_, slam_params_;       // nav2.yaml, slam_toolbox.yaml робота — для launch стеков
 
@@ -259,6 +270,12 @@ private:
   std::function<void()> nav_cancel_;              // отменить цель в Nav2; пусто — Nav2 её ещё не принял
   bool nav_cancel_wanted_ = false;                // отмену попросили до того, как Nav2 принял цель
   bool nav_dirty_ = false;                        // nav_ изменился — опубликовать
+  std::vector<LinePoint> line_;                   // маршрут «по линии»: точки и их s
+  double line_x0_ = 0.0, line_y0_ = 0.0;          // …начало линии — поза робота на старте
+  double line_s_ = 0.0;                           // …сколько проехано по линии (проекция позы)
+  std::vector<std::size_t> line_breaks_;          // …последняя точка каждой части
+  std::size_t line_part_ = 0;                     // …текущая часть
+  int line_retries_ = 0;                          // …перезапусков части: контроллер упёрся (препятствие)
 
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -272,6 +289,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_stamped_pub_;  // по cmd_vel_stamped_
   rclcpp::Publisher<robot_interfaces::msg::NavStatus>::SharedPtr nav_status_pub_;
   rclcpp::Publisher<PoseCov>::SharedPtr initial_pose_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr plan_pub_;  // маршрут «по линии» — в /plan, как путь планировщика
   rclcpp::Publisher<robot_interfaces::msg::ConfigChanged>::SharedPtr config_changed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr stop_lock_pub_;
 
@@ -290,7 +308,7 @@ private:
   rclcpp::Client<ManageNodes>::SharedPtr navigation_manage_client_;
   rclcpp_action::Client<NavigateToPose>::SharedPtr to_pose_client_;
   rclcpp_action::Client<FollowWaypoints>::SharedPtr waypoints_client_;
-  rclcpp_action::Client<NavigateThroughPoses>::SharedPtr through_poses_client_;
+  rclcpp_action::Client<FollowPath>::SharedPtr follow_path_client_;
   std::shared_ptr<rclcpp::AsyncParametersClient> smoother_params_;
 
   rclcpp::Service<SetOperatingMode>::SharedPtr set_mode_srv_;

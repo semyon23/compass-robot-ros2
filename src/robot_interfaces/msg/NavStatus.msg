@@ -3,7 +3,7 @@ string goal_id                   # id цели, выдаёт compass_core; пу�
 string source                    # compass
 string operator_name             # client_name владельца аренды, поставившего цель
 string kind                      # goal | route
-string mode                      # waypoints | through_poses (для route)
+string mode                      # waypoints | line (для route)
 Pose2D[] poses                   # для goal — одна
 uint32 index                     # к какой точке едем
 string state                     # active | succeeded | failed | canceled

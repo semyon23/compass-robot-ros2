@@ -21,6 +21,13 @@ constexpr auto kNavStartReply = 5s;
 // прерывается. check_nav отправит её через kNextGoalDelay..kNextGoalDelay + 500 мс.
 constexpr auto kNextGoalDelay = 300ms;
 
+// Маршрут «по линии»: шаг точек пути (контроллеру нужен плотный путь); точка засчитана, когда
+// робот проехал вдоль линии до неё без этого; сколько раз перезапускать часть, если контроллер
+// упёрся (препятствие на линии): progress_checker сдаётся за ~10 с — итого робот ждёт около минуты.
+constexpr double kPathStep = 0.05;
+constexpr double kLinePassed = 0.15;
+constexpr int kLineRetries = 6;
+
 // Пороги локализации по σ положения и курса из ковариации AMCL.
 constexpr double kOkSigma = 0.6;    // м и рад: робот знает, где он
 constexpr double kLostSigma = 2.0;  // м: потерялся
@@ -56,6 +63,52 @@ std::string nav_error(uint16_t code)
     case 2: case 3: return "NO_PATH";
     case 1: case 7: return "STUCK";
     default: return "NAV_FAILED";
+  }
+}
+
+// Где резать маршрут «по линии» на части: индексы последних точек частей. MPPI и goal_checker
+// в Jazzy меряют расстояние до конца пути по прямой: если с какого-то места линии конец ближе gap
+// по прямой, а по линии до него заметно дальше (петля, разворот), робот поехал бы прямо к концу.
+// Поэтому часть кончается в точке, после которой такое место появилось бы. «Заметно» — путь длиннее
+// прямой больше чем на gap / 2: на обычных поворотах ломаной разница мала, и линию не режем.
+std::vector<std::size_t> split_line(double x0, double y0, const std::vector<LinePoint> & line, double gap)
+{
+  std::vector<std::size_t> breaks;
+  std::vector<LinePoint> dense{{x0, y0, 0.0}};  // плотные точки текущей части
+  for (std::size_t k = 0; k < line.size(); ++k) {
+    const LinePoint & p = line[k];
+    const bool loop = std::any_of(dense.begin(), dense.end(), [&](const LinePoint & d) {
+      const double straight = std::hypot(p.x - d.x, p.y - d.y);
+      return straight < gap && p.s - d.s - straight > gap / 2;
+    });
+    if (loop && k > 0 && (breaks.empty() || breaks.back() != k - 1)) {
+      breaks.push_back(k - 1);
+      dense = {line[k - 1]};
+    }
+    const LinePoint from = dense.back();
+    const int steps = std::max(1, static_cast<int>(std::ceil((p.s - from.s) / kPathStep)));
+    for (int i = 1; i <= steps; ++i) {
+      const double f = static_cast<double>(i) / steps;
+      dense.push_back({from.x + (p.x - from.x) * f, from.y + (p.y - from.y) * f, from.s + (p.s - from.s) * f});
+    }
+  }
+  breaks.push_back(line.size() - 1);
+  return breaks;
+}
+
+// Отрезок a → b точками через kPathStep (без a, если путь не пуст), ориентация — вдоль отрезка.
+void append_segment(nav_msgs::msg::Path & path, double ax, double ay, double bx, double by)
+{
+  const double yaw = std::atan2(by - ay, bx - ax);
+  const int steps = std::max(1, static_cast<int>(std::ceil(std::hypot(bx - ax, by - ay) / kPathStep)));
+  for (int i = path.poses.empty() ? 0 : 1; i <= steps; ++i) {
+    geometry_msgs::msg::PoseStamped p;
+    p.header = path.header;
+    p.pose.position.x = ax + (bx - ax) * i / steps;
+    p.pose.position.y = ay + (by - ay) * i / steps;
+    p.pose.orientation.z = std::sin(yaw / 2);
+    p.pose.orientation.w = std::cos(yaw / 2);
+    path.poses.push_back(p);
   }
 }
 
@@ -100,11 +153,10 @@ void CompassCore::publish_initial_pose(const robot_interfaces::msg::Pose2D & pos
 
 // ---------- Сервисные цели ----------
 //
-// Цель Compass — прямо в Nav2 (ROS_INTERFACES.md §4): goal → navigate_to_pose, маршрут →
-// follow_waypoints или navigate_through_poses. NavStart отвечает, когда Nav2 принял цель.
-// Новая цель при активной: прежнюю отменяем и отправляем новую, когда Nav2 её завершил —
-// navigate_to_pose и navigate_through_poses делят один bt_navigator, и пока работает одна,
-// другую он отклоняет.
+// Цель Compass — прямо в Nav2 (ROS_INTERFACES.md §4): goal → navigate_to_pose, маршрут
+// «по точкам» → follow_waypoints, маршрут «по линии» → follow_path контроллера: ломаная через точки,
+// без планировщика — робот едет по нарисованной линии. NavStart отвечает, когда Nav2 принял цель.
+// Новая цель при активной: прежнюю отменяем и отправляем новую, когда Nav2 её завершил.
 
 void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
 {
@@ -142,7 +194,7 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
     return reply();
   }
   const bool goal = req->kind == "goal";
-  const bool route = req->kind == "route" && (req->mode == "waypoints" || req->mode == "through_poses");
+  const bool route = req->kind == "route" && (req->mode == "waypoints" || req->mode == "line");
   if ((goal && req->poses.size() != 1) || (!goal && !route) || req->poses.empty() || req->poses.size() > 100) {
     fail(res, "INVALID_INPUT", "цель — одна поза, маршрут — от 1 до 100 точек");
     return reply();
@@ -168,9 +220,13 @@ void CompassCore::send_goal(const NavStart::Request & req)
   const bool waypoints = req.mode == "waypoints";
   const bool ready = goal ? to_pose_client_->action_server_is_ready()
                      : waypoints ? waypoints_client_->action_server_is_ready()
-                     : through_poses_client_->action_server_is_ready();
+                     : follow_path_client_->action_server_is_ready();
   if (!ready) {
     return reply_nav_start(false, "INTERNAL", "Nav2 не отвечает");
+  }
+  double x = 0.0, y = 0.0;  // линия начинается от робота
+  if (!goal && !waypoints && !robot_in_map(x, y)) {
+    return reply_nav_start(false, "INTERNAL", "нет позы робота на карте");
   }
 
   prev_nav_ = nav_;
@@ -196,11 +252,22 @@ void CompassCore::send_goal(const NavStart::Request & req)
     }
     send_nav<FollowWaypoints>(waypoints_client_, g);
   } else {
-    NavigateThroughPoses::Goal g;
+    line_.clear();
+    double s = 0.0, px = x, py = y;
     for (const auto & p : req.poses) {
-      g.poses.push_back(pose_stamped(map_frame_, p));
+      s += std::hypot(p.x - px, p.y - py);
+      line_.push_back({p.x, p.y, s});
+      px = p.x;
+      py = p.y;
     }
-    send_nav<NavigateThroughPoses>(through_poses_client_, g);
+    line_breaks_ = split_line(x, y, line_, route_loop_gap_);
+    line_x0_ = x;
+    line_y0_ = y;
+    line_s_ = 0.0;
+    line_part_ = 0;
+    line_retries_ = 0;
+    RCLCPP_INFO(get_logger(), "Линия %.1f м, частей %zu", s, line_breaks_.size());
+    send_line_part();
   }
   RCLCPP_INFO(get_logger(), "Цель %s: %s %s, точек %zu", nav_.goal_id.c_str(), nav_.kind.c_str(),
               nav_.mode.c_str(), nav_.poses.size());
@@ -222,9 +289,12 @@ void CompassCore::send_nav(const std::shared_ptr<rclcpp_action::Client<Action>> 
       }
       return;
     }
-    if (!h) {
+    if (!h && nav_start_id_) {
       nav_ = prev_nav_;
       return reply_nav_start(false, "INTERNAL", "Nav2 не принял цель");
+    }
+    if (!h) {  // следующую часть маршрута «по линии» — цель уже идёт, NavStart давно ответил
+      return finish_goal(rclcpp_action::ResultCode::ABORTED, 0, "Nav2 не принял часть маршрута", "");
     }
     nav_cancel_ = [client, h] { client->async_cancel_goal(h); };
     reply_nav_start(true, "", "");
@@ -239,15 +309,23 @@ void CompassCore::send_nav(const std::shared_ptr<rclcpp_action::Client<Action>> 
     }
     if constexpr (std::is_same_v<Action, FollowWaypoints>) {
       nav_.index = fb->current_waypoint;  // расстояния follow_waypoints не сообщает
+    } else if constexpr (std::is_same_v<Action, FollowPath>) {
+      // Прогресс считаем сами — проекцией позы на линию: distance_to_goal контроллера в начале
+      // завышен, на поворотах замирает (nav_run11). Пройдены точки, до которых доехали по линии.
+      double x = 0.0, y = 0.0;
+      if (robot_in_map(x, y)) {
+        line_s_ = line_progress(x, y);
+      }
+      while (nav_.index < line_.size() && line_[nav_.index].s <= line_s_ + kLinePassed) {
+        ++nav_.index;
+      }
+      const double remaining = line_.back().s - line_s_;
+      nav_.distance_remaining = static_cast<float>(remaining);
+      nav_.eta = fb->speed > 0.05f ? static_cast<float>(remaining / fb->speed) : -1.0f;
     } else {
       nav_.distance_remaining = fb->distance_remaining;
       nav_.eta = static_cast<float>(rclcpp::Duration(fb->estimated_time_remaining).seconds());
       nav_.recoveries = static_cast<uint16_t>(fb->number_of_recoveries);
-    }
-    if constexpr (std::is_same_v<Action, NavigateThroughPoses>) {
-      const auto total = nav_.poses.size();
-      const auto remaining = std::min<std::size_t>(std::max<int>(fb->number_of_poses_remaining, 0), total);
-      nav_.index = static_cast<uint32_t>(total - remaining);
     }
     nav_dirty_ = true;
   };
@@ -266,7 +344,11 @@ void CompassCore::send_nav(const std::shared_ptr<rclcpp_action::Client<Action>> 
         }
       }
     }
-    finish_goal(w.code, error, message, missed);
+    if constexpr (std::is_same_v<Action, FollowPath>) {
+      on_line_result(w.code, error, message);
+    } else {
+      finish_goal(w.code, error, message, missed);
+    }
   };
 
   client->async_send_goal(goal, o);
@@ -300,6 +382,92 @@ void CompassCore::finish_goal(rclcpp_action::ResultCode code, uint16_t error, co
   RCLCPP_INFO(get_logger(), "Цель %s: %s %u %s", nav_.goal_id.c_str(), nav_.state.c_str(), error, message.c_str());
   publish_nav_status();
   nav_next_at_ = ChildProcess::Clock::now() + kNextGoalDelay;
+}
+
+bool CompassCore::robot_in_map(double & x, double & y)
+{
+  try {
+    const auto tf = tf_buffer_->lookupTransform(map_frame_, base_frame_, tf2::TimePointZero);
+    x = tf.transform.translation.x;
+    y = tf.transform.translation.y;
+    return true;
+  } catch (const tf2::TransformException &) {
+    return false;
+  }
+}
+
+// Проекция позы робота на линию — на отрезки, что лежат в окне −0.3…+1.0 м по линии от прошлого
+// положения: на петле, где линия проходит рядом сама с собой, не перескочит на другой её участок.
+double CompassCore::line_progress(double x, double y) const
+{
+  const double lo = line_s_ - 0.3, hi = line_s_ + 1.0;
+  double best_d = 1e9, best_s = line_s_;
+  double ax = line_x0_, ay = line_y0_, as = 0.0;
+  for (const LinePoint & b : line_) {
+    if (b.s >= lo && as <= hi && b.s > as) {
+      const double dx = b.x - ax, dy = b.y - ay;
+      const double t = std::clamp(((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy), 0.0, 1.0);
+      const double s = std::clamp(as + t * (b.s - as), lo, hi);
+      const double d = std::hypot(x - (ax + t * dx), y - (ay + t * dy));
+      if (d < best_d) {
+        best_d = d;
+        best_s = s;
+      }
+    }
+    ax = b.x;
+    ay = b.y;
+    as = b.s;
+  }
+  return std::max(0.0, best_s);
+}
+
+// Путь текущей части: от позы робота через непройденные точки части; в конце маршрута — курс
+// последней точки. Перезапуск части тоже строится заново от робота: контроллер ищет ближайшую к
+// роботу точку только в начале пути, и старый путь повёл бы его назад.
+void CompassCore::send_line_part()
+{
+  double x = 0.0, y = 0.0;
+  if (!robot_in_map(x, y)) {
+    return finish_goal(rclcpp_action::ResultCode::ABORTED, 0, "нет позы робота на карте", "");
+  }
+  const std::size_t first = line_part_ == 0 ? 0 : line_breaks_[line_part_ - 1] + 1;
+  const std::size_t last = line_breaks_[line_part_];
+  FollowPath::Goal g;
+  g.path.header.frame_id = map_frame_;  // stamp = 0: контроллер берёт последний TF
+  for (std::size_t k = std::min<std::size_t>(std::max<std::size_t>(first, nav_.index), last); k <= last; ++k) {
+    append_segment(g.path, x, y, line_[k].x, line_[k].y);
+    x = line_[k].x;
+    y = line_[k].y;
+  }
+  if (last + 1 == line_.size()) {
+    const double theta = nav_.poses.back().theta;
+    g.path.poses.back().pose.orientation.z = std::sin(theta / 2);
+    g.path.poses.back().pose.orientation.w = std::cos(theta / 2);
+  }
+  plan_pub_->publish(g.path);  // планировщик не участвует — путь на карте Compass рисуем сами
+  send_nav<FollowPath>(follow_path_client_, g);
+}
+
+// Часть доехана — следующая. Контроллер упёрся (нет прогресса, нет допустимой скорости) — чаще всего
+// препятствие на линии: ждём, перезапуская остаток части, пока не кончатся попытки.
+void CompassCore::on_line_result(rclcpp_action::ResultCode code, uint16_t error, const std::string & message)
+{
+  nav_cancel_ = nullptr;  // прежней части больше нет; отмену до приёма новой запомнит cancel_goal
+  if (code == rclcpp_action::ResultCode::SUCCEEDED && line_part_ + 1 < line_breaks_.size()) {
+    ++line_part_;
+    line_retries_ = 0;
+    return send_line_part();
+  }
+  const bool stuck = error == FollowPath::Result::PATIENCE_EXCEEDED ||
+                     error == FollowPath::Result::FAILED_TO_MAKE_PROGRESS ||
+                     error == FollowPath::Result::NO_VALID_CONTROL;
+  if (code == rclcpp_action::ResultCode::ABORTED && stuck && line_retries_ < kLineRetries) {
+    ++line_retries_;
+    nav_.recoveries = static_cast<uint16_t>(line_retries_);
+    RCLCPP_INFO(get_logger(), "Линия: контроллер упёрся (%u), попытка %d", error, line_retries_);
+    return send_line_part();
+  }
+  finish_goal(code, error, message, "");
 }
 
 void CompassCore::on_nav_cancel(Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res)

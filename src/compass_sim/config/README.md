@@ -13,7 +13,7 @@ TF `odom → base_link` и `base_link → <фрейм лидара>`, топик
 
 | Файл | Что | Что править под своего робота |
 |---|---|---|
-| `compass_core.yaml` | фреймы, топики, тип скорости, начальные имя и лимиты скорости | `base_frame`, `scan_topic`, `odom_topic`, `battery_topic`; `cmd_vel_stamped` (база ждёт `TwistStamped`), `holonomic` (меканум, омни); `robot_radius` (значок на карте); имя, серийный номер, модель |
+| `compass_core.yaml` | фреймы, топики, тип скорости, начальные имя и лимиты скорости | `base_frame`, `scan_topic`, `odom_topic`, `battery_topic`; `cmd_vel_stamped` (база ждёт `TwistStamped`), `holonomic` (меканум, омни); `robot_radius` (значок на карте); `route_loop_gap` (маршрут «по линии» на петлях); имя, серийный номер, модель |
 | `nav2.yaml` | Nav2: AMCL, костмапы, планировщик, контроллер | футпринт / радиус, скорости и ускорения, лидар, `base_frame_id`. **Обязательно**: `collision_monitor.cmd_vel_out_topic: cmd_vel_auto` — вход twist_mux от Nav2; `enable_stamped_cmd_vel` — как `cmd_vel_stamped` |
 | `slam_toolbox.yaml` | картографирование (TEACH_IN) | `base_frame`, `scan_topic`, `max_laser_range` |
 | `compass_web.yaml` | веб-сервер: порт, путь к собранному UI | `port` (80 на роботе), `ui_dir` |
