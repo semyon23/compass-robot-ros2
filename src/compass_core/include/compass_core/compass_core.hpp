@@ -25,6 +25,7 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <sensor_msgs/msg/battery_state.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <slam_toolbox/srv/pause.hpp>
 #include <slam_toolbox/srv/serialize_pose_graph.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -144,6 +145,7 @@ private:
               geometry_msgs::msg::TransformStamped & tf);
   void publish_pose();
   void on_scan(const sensor_msgs::msg::LaserScan & msg);
+  void on_camera(const sensor_msgs::msg::PointCloud2 & msg);
 
   // ---------- stacks.cpp ----------
 
@@ -220,6 +222,10 @@ private:
   robot_interfaces::msg::Battery battery_;
   double linear_ = 0.0, angular_ = 0.0;  // фактические скорости из одометрии
   ControlLease::Clock::time_point last_scan_{};
+  ControlLease::Clock::time_point last_camera_{};
+  double camera_min_height_ = 0.0;  // полоса препятствий камеры — как camera_layer костмапа
+  double camera_max_height_ = 0.0;
+  double camera_max_range_ = 0.0;
   ControlLease::Clock::time_point last_teleop_{};
   bool teleop_moving_ = false;  // последняя команда джойстика была ненулевой
   std::unique_ptr<LogStore> logs_;
@@ -285,6 +291,7 @@ private:
   rclcpp::Publisher<robot_interfaces::msg::Event>::SharedPtr event_pub_;
   rclcpp::Publisher<robot_interfaces::msg::RobotPose>::SharedPtr pose_pub_;
   rclcpp::Publisher<robot_interfaces::msg::ScanPoints>::SharedPtr scan_pub_;
+  rclcpp::Publisher<robot_interfaces::msg::ScanPoints>::SharedPtr camera_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;                // или
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_stamped_pub_;  // по cmd_vel_stamped_
   rclcpp::Publisher<robot_interfaces::msg::NavStatus>::SharedPtr nav_status_pub_;
@@ -296,6 +303,7 @@ private:
   rclcpp::Subscription<robot_interfaces::msg::TeleopCommand>::SharedPtr teleop_sub_;
   rclcpp::Subscription<robot_interfaces::msg::ControlHeartbeat>::SharedPtr heartbeat_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr camera_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::BatteryState>::SharedPtr battery_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;

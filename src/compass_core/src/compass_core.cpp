@@ -4,8 +4,11 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+#include <tf2/LinearMath/Transform.hpp>
 
 using namespace std::chrono_literals;
 
@@ -23,6 +26,7 @@ constexpr auto kLeaseTimeout = 2s;     // нет heartbeat и джойстика
 constexpr auto kTeleopTimeout = 500ms; // джойстик замолчал — останавливаем робота
 constexpr auto kScanPeriod = 200ms;    // скан для UI — 5 Гц
 constexpr std::size_t kScanPoints = 360;
+constexpr double kCameraCell = 0.025;   // [м] точки камеры для UI — по одной на клетку
 constexpr std::size_t kLogsKept = 1000;  // WARN+ из /rosout в памяти
 constexpr int kLogDays = 7;              // и столько дней — в файлах
 constexpr std::size_t kEventsKept = 200; // лента событий для UI
@@ -99,6 +103,7 @@ CompassCore::CompassCore() : Node("compass_core")
   event_pub_ = create_publisher<robot_interfaces::msg::Event>("/compass/events", rclcpp::QoS(50).reliable());
   pose_pub_ = create_publisher<robot_interfaces::msg::RobotPose>("/compass/pose", rclcpp::SensorDataQoS().keep_last(1));
   scan_pub_ = create_publisher<robot_interfaces::msg::ScanPoints>("/compass/scan_points", rclcpp::SensorDataQoS().keep_last(1));
+  camera_pub_ = create_publisher<robot_interfaces::msg::ScanPoints>("/compass/camera_points", rclcpp::SensorDataQoS().keep_last(1));
   // Вход teleop в twist_mux — того же типа, что ждёт twist_mux (use_stamped).
   if (cmd_vel_stamped_) {
     cmd_stamped_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("cmd_vel_teleop", rclcpp::QoS(1));
@@ -123,6 +128,16 @@ CompassCore::CompassCore() : Node("compass_core")
   scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
     declare_parameter("scan_topic", "scan"), rclcpp::SensorDataQoS(),
     [this](const sensor_msgs::msg::LaserScan & msg) { on_scan(msg); });
+  // Камера глубины — необязательна (пустой топик — нет камеры): её препятствия ниже луча лидара
+  // показываем в UI, как скан.
+  const auto camera_topic = declare_parameter("camera_topic", std::string(""));
+  camera_min_height_ = declare_parameter("camera_min_height", 0.03);
+  camera_max_height_ = declare_parameter("camera_max_height", 0.15);
+  camera_max_range_ = declare_parameter("camera_max_range", 1.5);
+  if (!camera_topic.empty()) {
+    camera_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
+      camera_topic, rclcpp::SensorDataQoS(), [this](const sensor_msgs::msg::PointCloud2 & msg) { on_camera(msg); });
+  }
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
     declare_parameter("odom_topic", "odom"), rclcpp::SensorDataQoS(), [this](const nav_msgs::msg::Odometry & msg) {
       linear_ = msg.twist.twist.linear.x;
@@ -689,6 +704,49 @@ void CompassCore::on_scan(const sensor_msgs::msg::LaserScan & msg)
     out.points.push_back(static_cast<float>(ty + s * lx + c * ly));
   }
   scan_pub_->publish(out);
+}
+
+// Облако камеры для UI: те же точки, что camera_layer костмапа считает препятствиями, — в полосе высот
+// над полом (z мирового фрейма) и не дальше camera_max_range от камеры; по одной на клетку kCameraCell.
+void CompassCore::on_camera(const sensor_msgs::msg::PointCloud2 & msg)
+{
+  const auto t = ControlLease::Clock::now();
+  if (t - last_camera_ < kScanPeriod) {
+    return;
+  }
+  last_camera_ = t;
+
+  std::string frame;
+  geometry_msgs::msg::TransformStamped tf;
+  if (!lookup(msg.header.frame_id, frame, tf)) {
+    return;
+  }
+  const auto & r = tf.transform.rotation;
+  const auto & p = tf.transform.translation;
+  const tf2::Transform to_world(tf2::Quaternion(r.x, r.y, r.z, r.w), tf2::Vector3(p.x, p.y, p.z));
+
+  robot_interfaces::msg::ScanPoints out;
+  out.stamp = msg.header.stamp;
+  out.frame = frame;
+  std::unordered_set<std::int64_t> cells;
+  sensor_msgs::PointCloud2ConstIterator<float> x(msg, "x"), y(msg, "y"), z(msg, "z");
+  for (; x != x.end(); ++x, ++y, ++z) {
+    if (!std::isfinite(*z) || std::hypot(*x, *y, *z) > camera_max_range_) {
+      continue;
+    }
+    const tf2::Vector3 w = to_world * tf2::Vector3(*x, *y, *z);
+    if (w.z() < camera_min_height_ || w.z() > camera_max_height_) {
+      continue;
+    }
+    // Номер клетки: ±100 км по каждой оси без совпадений.
+    const auto cx = static_cast<std::int64_t>(std::floor(w.x() / kCameraCell));
+    const auto cy = static_cast<std::int64_t>(std::floor(w.y() / kCameraCell));
+    if (cells.insert(cx * 10'000'000 + cy).second) {
+      out.points.push_back(static_cast<float>(w.x()));
+      out.points.push_back(static_cast<float>(w.y()));
+    }
+  }
+  camera_pub_->publish(out);
 }
 
 }  // namespace compass_core
