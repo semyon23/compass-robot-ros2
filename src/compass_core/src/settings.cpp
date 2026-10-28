@@ -121,7 +121,9 @@ void CompassCore::check_battery()
   }
   if (!battery_critical_ && p < setting("battery.critical_percent")) {
     battery_critical_ = true;
-    cancel_goal();
+    if (nav_.source == "compass") {
+      cancel_goal();  // задание fms не трогаем: возможно, fms как раз везёт робота на зарядку
+    }
     emit_event("error", "BATTERY_CRITICAL", "Battery critical: " + pct + "%", {{"percent", pct}});
   } else if (battery_critical_ && p > setting("battery.critical_percent") + 2) {
     battery_critical_ = false;

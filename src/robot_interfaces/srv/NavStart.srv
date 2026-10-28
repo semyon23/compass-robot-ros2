@@ -1,9 +1,12 @@
-# /compass/nav/start — сервисная цель или маршрут (только SERVICE, только владелец аренды).
-# Прежняя цель Compass отменяется. Ответ — когда Nav2 принял цель или отказал.
-string lease_id
+# /compass/nav/start — цель или маршрут. Кто может: source compass — оператор Compass в SERVICE,
+# владелец аренды; source fms — агент VDA 5050 в AUTOMATIC, без аренды.
+# Прежняя цель отменяется; маршрут «по линии» того же источника заменяется на ходу, без остановки.
+# Ответ — когда Nav2 принял цель или отказал.
+string source                    # compass (пусто — тоже) | fms
+string lease_id                  # для compass
 string kind                      # goal | route
 string mode                      # waypoints | line (для route)
-Pose2D[] poses                   # 1..100, фрейм map
+Pose2D[] poses                   # 1..100 (fms — до 1000), фрейм map
 ---
 bool success
 string error_code

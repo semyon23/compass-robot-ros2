@@ -1,7 +1,7 @@
-# /compass/nav_status — сервисная цель Compass (reliable, transient_local, 1).
+# /compass/nav_status — текущая или последняя цель (reliable, transient_local, 1).
 string goal_id                   # id цели, выдаёт compass_core; пусто — цели не было
-string source                    # compass
-string operator_name             # client_name владельца аренды, поставившего цель
+string source                    # compass — оператор Compass | fms — агент VDA 5050
+string operator_name             # client_name владельца аренды, поставившего цель; для fms — пусто
 string kind                      # goal | route
 string mode                      # waypoints | line (для route)
 Pose2D[] poses                   # для goal — одна

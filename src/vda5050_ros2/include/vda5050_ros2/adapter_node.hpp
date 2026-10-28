@@ -23,7 +23,7 @@
 #include "vda5050_ros2/state_publisher.hpp"
 
 // Агент VDA 5050 на роботе. Связь с fms — MQTT (MqttLink), состояние робота — из compass_core,
-// order'а — OrderManager, езда — Drive (Nav2 FollowPath).
+// order'а — OrderManager, езда — Drive (маршрут «по линии» через compass_core).
 // Вся логика в одном потоке ROS executor'а: колбэки подписок и таймеров, входящие MQTT —
 // через очередь MqttLink, которую разбирает tick().
 class AdapterNode : public rclcpp::Node {
@@ -65,7 +65,7 @@ private:
   std::unique_ptr<ActionRunner> actions_;
   std::unique_ptr<OrderManager> orders_;
   std::unique_ptr<Drive> drive_;
-  std::uint32_t goal_end_seq_ = 0;  // sequenceId узла, до которого отправлена цель Nav2
+  std::uint32_t goal_end_seq_ = 0;  // sequenceId узла, до которого отправлен маршрут compass_core
 
   std::vector<std::string> pending_cancels_;  // cancelOrder ждут неотменяемые action'ы
   struct PendingInit {                        // initializePosition ждёт, когда AMCL примет позу

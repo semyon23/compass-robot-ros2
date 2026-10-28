@@ -11,9 +11,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(robot_interfaces REQUIRED)
-find_package(rclcpp_action REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(nav2_msgs REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(PahoMqttCpp REQUIRED)
 
@@ -30,7 +29,7 @@ add_executable(vda5050_adapter
 )
 # third_party/vda5050 — копия ~/fleet-manager/vda5050 (типы сообщений VDA 5050 v3), подключается как <vda5050.hpp>.
 target_include_directories(vda5050_adapter PRIVATE include third_party/vda5050)
-ament_target_dependencies(vda5050_adapter rclcpp rclcpp_action std_msgs nav_msgs nav2_msgs robot_interfaces)
+ament_target_dependencies(vda5050_adapter rclcpp std_msgs std_srvs nav_msgs robot_interfaces)
 target_link_libraries(vda5050_adapter nlohmann_json::nlohmann_json PahoMqttCpp::paho-mqttpp3)
 
 install(TARGETS vda5050_adapter DESTINATION lib/${PROJECT_NAME})

@@ -151,27 +151,34 @@ void CompassCore::publish_initial_pose(const robot_interfaces::msg::Pose2D & pos
   initial_pose_pub_->publish(msg);
 }
 
-// ---------- Сервисные цели ----------
+// ---------- Цели ----------
 //
-// Цель Compass — прямо в Nav2 (ROS_INTERFACES.md §4): goal → navigate_to_pose, маршрут
-// «по точкам» → follow_waypoints, маршрут «по линии» → follow_path контроллера: ломаная через точки,
-// без планировщика — робот едет по нарисованной линии. NavStart отвечает, когда Nav2 принял цель.
+// Цели ставят оператор Compass (source compass, SERVICE) и агент VDA 5050 (source fms, AUTOMATIC) —
+// прямо в Nav2 (ROS_INTERFACES.md §4): goal → navigate_to_pose, маршрут «по точкам» →
+// follow_waypoints, маршрут «по линии» → follow_path контроллера: ломаная через точки, без
+// планировщика — робот едет по нарисованной линии. NavStart отвечает, когда Nav2 принял цель.
 // Новая цель при активной: прежнюю отменяем и отправляем новую, когда Nav2 её завершил.
+// Исключение — линия того же источника: новый путь контроллер принимает на ходу.
 
 void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
 {
   auto res = std::make_shared<NavStart::Response>();
   auto reply = [this, id, res] { nav_start_srv_->send_response(*id, *res); };
 
-  if (mode_ != "SERVICE") {
-    fail(res, "MODE_NOT_ALLOWED", "сервисные цели — только в режиме SERVICE");
+  const bool fms = req->source == "fms";
+  if (!fms && !req->source.empty() && req->source != "compass") {
+    fail(res, "INVALID_INPUT", "source — compass или fms");
+    return reply();
+  }
+  if (fms ? mode_ != "AUTOMATIC" : mode_ != "SERVICE") {
+    fail(res, "MODE_NOT_ALLOWED", fms ? "задания fms — только в режиме AUTOMATIC" : "сервисные цели — только в режиме SERVICE");
     return reply();
   }
   if (stopped_) {
     fail(res, "MODE_NOT_ALLOWED", "нажат СТОП — сначала снимите его");
     return reply();
   }
-  if (!lease_.touch(req->lease_id, ControlLease::Clock::now())) {
+  if (!fms && !lease_.touch(req->lease_id, ControlLease::Clock::now())) {
     fail(res, "CONTROL_LOCKED", "сначала возьмите управление");
     return reply();
   }
@@ -183,7 +190,8 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
     fail(res, "MODE_NOT_ALLOWED", "робот не локализован: задайте позу на карте");
     return reply();
   }
-  if (battery_.present && battery_.percent < setting("battery.min_task_percent")) {
+  // Заряд — для целей Compass. Задания fms не ограничиваем: на зарядку робота отправляет fms.
+  if (!fms && battery_.present && battery_.percent < setting("battery.min_task_percent")) {
     fail(res, "MODE_NOT_ALLOWED", "заряд " + std::to_string(static_cast<int>(battery_.percent)) +
                                     "% ниже минимума для задач " +
                                     std::to_string(static_cast<int>(setting("battery.min_task_percent"))) + "%");
@@ -195,8 +203,10 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
   }
   const bool goal = req->kind == "goal";
   const bool route = req->kind == "route" && (req->mode == "waypoints" || req->mode == "line");
-  if ((goal && req->poses.size() != 1) || (!goal && !route) || req->poses.empty() || req->poses.size() > 100) {
-    fail(res, "INVALID_INPUT", "цель — одна поза, маршрут — от 1 до 100 точек");
+  // Маршрут fms — отрезок order'а до остановки, узлов в нём может быть больше, чем ставят руками.
+  const std::size_t max_poses = fms ? 1000 : 100;
+  if ((goal && req->poses.size() != 1) || (!goal && !route) || req->poses.empty() || req->poses.size() > max_poses) {
+    fail(res, "INVALID_INPUT", "цель — одна поза, маршрут — от 1 до " + std::to_string(max_poses) + " точек");
     return reply();
   }
   if (nav_start_id_) {
@@ -206,7 +216,12 @@ void CompassCore::on_nav_start(RequestId id, NavStart::Request::SharedPtr req)
 
   nav_start_id_ = id;
   nav_start_deadline_ = ChildProcess::Clock::now() + kNavStartReply;
-  if (nav_.state == "active") {
+  const std::string source = fms ? "fms" : "compass";
+  // Линию того же источника продлили (fms досылает order) — новый путь контроллеру сразу: он заменит
+  // прежний на ходу, робот не тормозит. Ответы Nav2 на прежнюю цель отсеет смена goal_id.
+  const bool extend = nav_.state == "active" && nav_.mode == "line" && nav_.source == source &&
+                      req->kind == "route" && req->mode == "line" && !nav_next_;
+  if (nav_.state == "active" && !extend) {
     cancel_goal();
     nav_next_ = req;  // отправит check_nav, когда Nav2 завершит прежнюю
     return;
@@ -232,8 +247,8 @@ void CompassCore::send_goal(const NavStart::Request & req)
   prev_nav_ = nav_;
   nav_ = robot_interfaces::msg::NavStatus{};
   nav_.goal_id = make_goal_id();
-  nav_.source = "compass";
-  nav_.operator_name = lease_.holder_name();
+  nav_.source = req.source == "fms" ? "fms" : "compass";
+  nav_.operator_name = req.source == "fms" ? "" : lease_.holder_name();
   nav_.kind = req.kind;
   nav_.mode = goal ? "" : req.mode;
   nav_.poses = req.poses;
@@ -477,6 +492,7 @@ void CompassCore::on_nav_cancel(Trigger::Request::SharedPtr, Trigger::Response::
 }
 
 // Итог отмены (canceled) приходит результатом Nav2 — finish_goal.
+// Пока Nav2 принимает новую линию на смену прежней (NavStart ждёт ответа), отменяем обе.
 void CompassCore::cancel_goal()
 {
   if (nav_next_) {  // новая цель ждала, пока отменится прежняя, — отменяется и она
@@ -488,9 +504,8 @@ void CompassCore::cancel_goal()
   }
   if (nav_cancel_) {
     nav_cancel_();
-  } else {
-    nav_cancel_wanted_ = true;
   }
+  nav_cancel_wanted_ = !nav_cancel_ || nav_start_id_;
 }
 
 void CompassCore::reply_nav_start(bool success, const std::string & code, const std::string & message)

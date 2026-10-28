@@ -215,9 +215,7 @@ void CompassCore::set_mode(const std::string & mode)
   if (mode == mode_) {
     return;
   }
-  if (mode_ == "SERVICE") {
-    cancel_goal();  // сервисные цели — только в SERVICE
-  }
+  cancel_goal();  // цель Compass — только в SERVICE, задание fms — только в AUTOMATIC
   mode_ = mode;
   std_msgs::msg::String msg;
   msg.data = mode_;
@@ -549,7 +547,7 @@ void CompassCore::on_teleop(const robot_interfaces::msg::TeleopCommand & msg)
 void CompassCore::on_stop(Trigger::Request::SharedPtr, Trigger::Response::SharedPtr res)
 {
   publish_zero();
-  cancel_goal();  // задание fms агент останавливает сам — по status.estop
+  cancel_goal();  // и задание fms: агент видит status.estop и новых не шлёт
   if (!stopped_) {
     stopped_ = true;
     emit_event("warning", "STOP_PRESSED", "Stop pressed");

@@ -3,7 +3,7 @@
 <package format="3">
   <name>vda5050_ros2</name>
   <version>0.1.0</version>
-  <description>Агент VDA 5050 v3 на роботе: связь с fms по MQTT, state из compass_core, езда по order'ам через Nav2</description>
+  <description>Агент VDA 5050 v3 на роботе: связь с fms по MQTT, state из compass_core, езда по order'ам через compass_core</description>
   <maintainer email="semen@example.com">semen</maintainer>
   <license>Proprietary</license>
 
@@ -11,9 +11,8 @@
 
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
-  <depend>rclcpp_action</depend>
+  <depend>std_srvs</depend>
   <depend>nav_msgs</depend>
-  <depend>nav2_msgs</depend>
   <depend>robot_interfaces</depend>
   <depend>nlohmann-json-dev</depend>
   <!-- apt: libpaho-mqttpp-dev (paho-mqtt-cpp 1.2) -->

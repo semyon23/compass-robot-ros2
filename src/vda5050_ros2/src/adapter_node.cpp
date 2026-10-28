@@ -197,7 +197,7 @@ void AdapterNode::drive_step()
     }
     segment = orders_->segment();
   } else if (result != Drive::Result::None && !segment.empty()) {
-    // Nav2 не доехал (препятствие, нет прогресса) или остановился не у узла.
+    // compass_core не довёз (препятствие не ушло за его попытки, ~минута) или робот встал не у узла.
     // Робот стоит и ждёт fms: cancelOrder или новый order.
     add_error(v::error_type::kNodeUnreachable, v::ErrorLevel::Critical,
               "cannot reach node " + segment.front().node_id, "nodeId", segment.front().node_id);
@@ -229,8 +229,9 @@ void AdapterNode::drive_step()
     for (const auto & node : segment) {
       points.push_back({node.node_position->x, node.node_position->y});
     }
-    drive_->follow(pos.x, pos.y, points);
-    goal_end_seq_ = segment.back().sequence_id;
+    if (drive_->follow(pos.x, pos.y, points)) {
+      goal_end_seq_ = segment.back().sequence_id;
+    }
   }
 }
 
