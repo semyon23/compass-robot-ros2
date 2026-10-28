@@ -4,7 +4,7 @@ rosbridge_websocket:
   ros__parameters:
     address: "127.0.0.1"
     port: 9090
-    topics_sub_glob: "[/robot/operating_mode, /compass/status, /compass/pose, /compass/scan_points, /compass/camera_points, /compass/nav_status, /compass/events, /compass/config/changed, /behavior_tree_log, /vda5050/status, /vda5050/path, /map, /plan, /optimal_trajectory, /particle_cloud, /local_costmap/costmap, /global_costmap/costmap, /rosout]"
+    topics_sub_glob: "[/robot/operating_mode, /compass/status, /compass/pose, /compass/scan_points, /compass/camera_points, /camera/camera/color/image_raw/compressed, /compass/nav_status, /compass/events, /compass/config/changed, /behavior_tree_log, /vda5050/status, /vda5050/path, /map, /plan, /optimal_trajectory, /particle_cloud, /local_costmap/costmap, /global_costmap/costmap, /rosout]"
     topics_pub_glob: "[/compass/teleop, /compass/control/heartbeat, /initialpose]"
     services_glob: "[/compass/*, /robot/set_operating_mode, /robot/maps/activate]"
     actions_glob: "[]"
