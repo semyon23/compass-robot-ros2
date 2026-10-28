@@ -123,6 +123,7 @@ void AdapterNode::tick()
   }
 
   drive_step();
+  update_planned_path();
   finish_instant_actions();
   publisher_->update_state(state_, std::exchange(state_requested_, false));
   publish_for_compass();
@@ -169,6 +170,38 @@ void AdapterNode::publish_for_compass()
   if (path != last_vda_path_) {
     vda_path_pub_->publish(path);
     last_vda_path_ = path;
+  }
+}
+
+// plannedPath: путь, по которому compass_core ведёт робота, — ломаная как NURBS 1-й степени.
+// Нет езды — нет поля. Путь в сравнение state не входит, поэтому новый путь отправляем сразу сами.
+void AdapterNode::update_planned_path()
+{
+  std::optional<v::PlannedPath> planned;
+  const auto & plan = drive_->plan();
+  if (drive_->active() && plan.size() > 1) {
+    // Узлы NURBS 1-й степени — доля длины пути у каждой вершины, края повторены: 0, 0, …, 1, 1.
+    std::vector<double> s{0.0};
+    for (std::size_t i = 1; i < plan.size(); ++i) {
+      s.push_back(s.back() + std::hypot(plan[i].x - plan[i - 1].x, plan[i].y - plan[i - 1].y));
+    }
+    if (s.back() > 0.0) {
+      v::Trajectory t;
+      t.degree = 1;
+      t.knot_vector = std::vector<double>{0.0};
+      for (std::size_t i = 0; i < plan.size(); ++i) {
+        t.control_points.push_back({plan[i].x, plan[i].y, std::nullopt});
+        t.knot_vector->push_back(s[i] / s.back());
+      }
+      t.knot_vector->push_back(1.0);
+      planned = v::PlannedPath{t, std::nullopt};
+    }
+  }
+  const bool changed = planned.has_value() != state_.planned_path.has_value() ||
+    (planned && planned->trajectory != state_.planned_path->trajectory);
+  if (changed) {
+    state_.planned_path = planned;
+    state_requested_ = true;
   }
 }
 

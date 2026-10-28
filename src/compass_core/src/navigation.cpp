@@ -459,7 +459,13 @@ void CompassCore::send_line_part()
     g.path.poses.back().pose.orientation.z = std::sin(theta / 2);
     g.path.poses.back().pose.orientation.w = std::cos(theta / 2);
   }
-  plan_pub_->publish(g.path);  // планировщик не участвует — путь на карте Compass рисуем сами
+  // Планировщик не участвует — путь в /plan публикуем сами, и весь оставшийся маршрут, а не только
+  // эту часть: на карте Compass и у fms (plannedPath) петля видна целиком.
+  nav_msgs::msg::Path plan = g.path;
+  for (std::size_t k = last + 1; k < line_.size(); ++k) {
+    append_segment(plan, line_[k - 1].x, line_[k - 1].y, line_[k].x, line_[k].y);
+  }
+  plan_pub_->publish(plan);
   send_nav<FollowPath>(follow_path_client_, g);
 }
 

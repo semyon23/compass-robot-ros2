@@ -34,6 +34,7 @@ public:
 private:
   void tick();
   void drive_step();
+  void update_planned_path();  // state.plannedPath из пути compass_core
   void handle_instant_actions(const std::string & payload);
   vda5050::ActionStatus run_instant_action(const vda5050::Action & action);
   vda5050::ActionStatus initialize_position(const vda5050::Action & action);

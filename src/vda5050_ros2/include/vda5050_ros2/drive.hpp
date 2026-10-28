@@ -5,6 +5,7 @@
 #include <utility>
 #include <vector>
 
+#include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <robot_interfaces/msg/nav_status.hpp>
 #include <robot_interfaces/srv/nav_start.hpp>
@@ -29,6 +30,9 @@ public:
   void stop();
   bool active() const { return active_; }
 
+  // Путь, по которому compass_core сейчас ведёт робота (/plan), — вершины ломаной. Смотреть, пока active().
+  const std::vector<Point> & plan() const { return plan_; }
+
   // Чем закончилась последняя цель; один раз, потом None. Отменённая (СТОП, смена режима) — None:
   // агент поставит её заново, когда снова можно ехать.
   Result take_result() { return std::exchange(result_, Result::None); }
@@ -44,7 +48,9 @@ private:
   rclcpp::Client<NavStart>::SharedPtr start_client_;
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr cancel_client_;
   rclcpp::Subscription<NavStatus>::SharedPtr status_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr plan_sub_;
   NavStatus last_status_;
+  std::vector<Point> plan_;
   std::string goal_id_;               // наша цель у compass_core; пусто — ещё не принята
   std::uint64_t request_number_ = 0;  // ответ на запрос, после которого был stop(), — отменить цель
   bool pending_ = false;              // запрос отправлен, ответа ещё нет
